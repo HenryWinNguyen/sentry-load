@@ -82,6 +82,23 @@ Users → │  Control API │ (Go) — auth, domain verification, job config, r
   (tens of thousands of VUs), billing/payments, teams/org accounts, a custom
   test-scripting DSL, non-HTTP protocol testing. Full list in SCOPE.md.
 
+## Working autonomy
+
+Proceed without asking for: writing/editing code within the current
+milestone, local builds/tests, commits to that milestone's branch, updating
+`docs/PROGRESS.md`, adding a package clearly needed for the current
+milestone. Opening and merging the PR to `main` once local verification
+passes is also autonomous — no need to wait for review.
+
+Stop and check in for: the end of every milestone (M1, M2, ...) — summarize
+what shipped before starting the next one; anything touching money or a new
+external account (cloud signups, DNS records — these need Henry's identity/
+payment info so they're his steps regardless); any deviation from what's
+written in SCOPE.md/CLAUDE.md (if reality forces a scope or architecture
+change mid-build, pause and explain rather than quietly changing course);
+anything destructive or hard to reverse (force-push, history reset,
+deleting branches).
+
 ## Repo etiquette
 
 - **Branching**: one branch per milestone (e.g. `m1-coordinator-worker-skeleton`,
