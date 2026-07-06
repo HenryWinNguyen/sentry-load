@@ -34,5 +34,12 @@ worker skeleton.
   guessed names. Deferred `typescript-lsp`, `vercel`, `terraform`,
   `grafana-mcp` until their respective milestones (V2 dashboard, deployment,
   Final observability)
-- Next: create GitHub repo (public) once `gh auth login` is done, then start
-  M1 — coordinator + worker skeleton talking over local Redis
+- Installed `feature-dev` (official Anthropic plugin: `code-architect`,
+  `code-explorer`, `code-reviewer` agents + `/feature-dev` command) — maps
+  onto the milestone-driven build process. Evaluated and skipped
+  `compounding-engineering` (third-party marketplace, mostly irrelevant
+  bundled content for a Go project) and deferred `frontend-design`
+  (official, but no UI work until V2/M10)
+- `gh auth login` complete (HTTPS, account HenryWinNguyen)
+- Next: create GitHub repo (public), then start M1 — coordinator + worker
+  skeleton talking over local Redis
