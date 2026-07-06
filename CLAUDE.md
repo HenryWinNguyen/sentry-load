@@ -101,6 +101,10 @@ Users → │  Control API │ (Go) — auth, domain verification, job config, r
 - **Docs stay current**: when a milestone changes the architecture or a
   constraint, update this file or SCOPE.md in the same PR — don't let them
   drift from what's actually built.
+- **Progress log**: [docs/PROGRESS.md](./docs/PROGRESS.md) tracks major
+  milestones/additions as they land, reverse-chronological. Check it first
+  to see current status; append an entry (in the same commit) whenever a
+  milestone completes or a major addition/decision happens.
 
 ## Frequently used commands
 
