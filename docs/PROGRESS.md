@@ -7,8 +7,8 @@ see where the build stands without scrolling back through chat history. See
 
 ## Current status
 
-**Pre-M1.** Scoping and repo scaffolding done. Not yet started: coordinator/
-worker skeleton.
+**Starting M1.** Scoping, repo scaffolding, and GitHub repo done. About to
+start: coordinator/worker skeleton over local Redis.
 
 ## Log
 
@@ -41,5 +41,6 @@ worker skeleton.
   bundled content for a Go project) and deferred `frontend-design`
   (official, but no UI work until V2/M10)
 - `gh auth login` complete (HTTPS, account HenryWinNguyen)
-- Next: create GitHub repo (public), then start M1 — coordinator + worker
-  skeleton talking over local Redis
+- Created GitHub repo (public): https://github.com/HenryWinNguyen/sentry-load
+  — initial commits pushed
+- Next: M1 — coordinator + worker skeleton talking over local Redis
