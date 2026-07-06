@@ -27,5 +27,12 @@ worker skeleton.
 - Wrote CLAUDE.md: architecture overview, user experience flow, constraints
   and policies, repo etiquette, commands reference
 - Initialized git repo, first commit (SCOPE.md, CLAUDE.md, .gitignore)
-- Next: create GitHub repo (public), then start M1 — coordinator + worker
-  skeleton talking over local Redis
+- Installed Claude Code plugins tied to immediate/next work (not
+  speculative): `gopls-lsp` (Go code intelligence), `github` (official
+  GitHub MCP server), `redis-development` (Redis Streams best practices).
+  Verified against the actual official marketplace catalog rather than
+  guessed names. Deferred `typescript-lsp`, `vercel`, `terraform`,
+  `grafana-mcp` until their respective milestones (V2 dashboard, deployment,
+  Final observability)
+- Next: create GitHub repo (public) once `gh auth login` is done, then start
+  M1 — coordinator + worker skeleton talking over local Redis
