@@ -7,10 +7,12 @@ see where the build stands without scrolling back through chat history. See
 
 ## Current status
 
-**M4 complete.** Real guinea-pig target app with a genuine, verified
-fast/slow contrast. Only M5 (real remote deployment) left in V1 — the one
-step that needs Henry's own cloud account, so it's next as a checklist
-rather than something I can run autonomously.
+**M1-M4 done, blocked on M5.** Everything that doesn't require an external
+account is complete and verified: coordinator, worker (real load
+generation + live metrics), guinea-pig app with a genuine fast/slow
+contrast. M5 (deploy to real infra) needs Henry to create an Oracle Cloud
+account first — see [M5_CHECKLIST.md](./M5_CHECKLIST.md) for exact steps.
+Nothing left to do autonomously until that's handed off.
 
 ## Log
 
