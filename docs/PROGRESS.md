@@ -7,12 +7,34 @@ see where the build stands without scrolling back through chat history. See
 
 ## Current status
 
-**M2 complete.** Worker generates real HTTP load (steady/ramp, hard-capped)
-against a target and records raw per-request results. Starting M3 next:
-turning those into RPS/percentiles/error-rate and streaming them back to
-the coordinator.
+**M3 complete — V1 walking skeleton (M1-M3) fully working end to end.**
+Coordinator enqueues a job and watches live metrics stream back from the
+worker until done. Next: M4 (guinea-pig target app) and M5 (real remote
+deployment — the one step that needs Henry's own cloud account).
 
 ## Log
+
+### 2026-07-05 — M3 complete: metrics aggregation and live reporting
+- `worker/metrics.go`: `computeMetrics` turns raw per-request results into
+  RPS/p50/p95/p99/error-count. A request counts as an error on connection
+  failure/timeout OR a 5xx response — the target being unhealthy, not just
+  the client failing
+- `worker/loadgen.go`: `runLoadTest` now takes an `onUpdate` callback,
+  fired roughly once per second with a live snapshot plus once more at the
+  end with `done=true`
+- `worker/main.go`: publishes each snapshot to a new `sentry:results`
+  Redis stream, keyed by job ID
+- `coordinator/main.go`: after enqueuing, watches `sentry:results` from
+  "now" (`$`), prints every snapshot for its own job ID, stops on
+  `done=true` or a safety timeout (duration + 15s) so it can never hang
+  forever if something goes wrong
+- Verified live end-to-end: 10 VUs / 10s steady job produced 11 real
+  snapshots (10 ticks + final), correctly capped at the ~500 RPS safety
+  limiter, percentiles computed each tick, coordinator's final tally
+  (5010 requests) matched the worker's own log exactly
+- Next: M4 — guinea-pig target app (fast endpoint + intentionally
+  bottlenecked endpoint), replacing the throwaway `python -m http.server`
+  used for M1-M3 verification
 
 ### 2026-07-05 — M2 complete: real HTTP load generation
 - `worker/job.go`: parses the job's wire fields (id/url/vus/

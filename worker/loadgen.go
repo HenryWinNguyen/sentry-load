@@ -19,14 +19,18 @@ type RequestResult struct {
 }
 
 // runLoadTest generates load against job.URL per job.VUs/DurationSeconds/
-// RampPattern and returns every request's raw result.
+// RampPattern and returns every request's raw result. If onUpdate is
+// non-nil, it's called roughly once per second with a live metrics
+// snapshot, and once more at the end with Done=true — that's how the
+// coordinator gets a running view of the test instead of just a final
+// number.
 //
 // Each VU is a goroutine in a closed-loop (send, wait for response, send
 // again) — the standard virtual-user model, not a fixed-RPS open model.
 // A shared rate limiter caps aggregate RPS at maxSafeRPS regardless of VU
 // count, as a safety backstop independent of the per-job hard caps in
 // job.go.
-func runLoadTest(ctx context.Context, job Job) []RequestResult {
+func runLoadTest(ctx context.Context, job Job, onUpdate func(Metrics)) []RequestResult {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(job.DurationSeconds)*time.Second)
 	defer cancel()
 
@@ -45,6 +49,32 @@ func runLoadTest(ctx context.Context, job Job) []RequestResult {
 		mu.Lock()
 		results = append(results, r)
 		mu.Unlock()
+	}
+	snapshot := func() []RequestResult {
+		mu.Lock()
+		defer mu.Unlock()
+		cp := make([]RequestResult, len(results))
+		copy(cp, results)
+		return cp
+	}
+
+	start := time.Now()
+	tickerDone := make(chan struct{})
+	if onUpdate != nil {
+		go func() {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tickerDone:
+					return
+				case <-ticker.C:
+					onUpdate(computeMetrics(job.ID, snapshot(), time.Since(start), false))
+				}
+			}
+		}()
 	}
 
 	vuLoop := func() {
@@ -93,5 +123,10 @@ func runLoadTest(ctx context.Context, job Job) []RequestResult {
 	}
 
 	wg.Wait()
-	return results
+	close(tickerDone)
+	final := snapshot()
+	if onUpdate != nil {
+		onUpdate(computeMetrics(job.ID, final, time.Since(start), true))
+	}
+	return final
 }
