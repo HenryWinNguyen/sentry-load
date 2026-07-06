@@ -7,10 +7,27 @@ see where the build stands without scrolling back through chat history. See
 
 ## Current status
 
-**Starting M1.** Scoping, repo scaffolding, and GitHub repo done. About to
-start: coordinator/worker skeleton over local Redis.
+**M1 complete.** Coordinator and worker talk to each other over local Redis
+Streams. Starting M2 next: real load generation.
 
 ## Log
+
+### 2026-07-05 — M1 complete: coordinator/worker skeleton over local Redis
+- Installed Go 1.26.4 (Homebrew) — wasn't present on the machine
+- `docker-compose.yml`: local Redis 7 on :6379
+- `/coordinator`: Go module, connects to Redis, XADDs one fake job
+  (id/url/vus/duration_seconds/ramp_pattern) to stream `sentry:jobs`, exits
+- `/worker`: Go module, creates a consumer group on `sentry:jobs`, blocks on
+  `XREADGROUP`, logs each job received, XACKs it, runs until SIGINT/SIGTERM
+- `go.work` at repo root wires up both modules for local tooling (gopls,
+  etc.) without merging them — still independently deployable
+- Verified end-to-end: started worker in background, ran coordinator, worker
+  logged the exact job the coordinator enqueued — the core plumbing works
+- Set up a scoped Bash permission allowlist (`.claude/settings.local.json`,
+  gitignored) for routine commands (go/docker/git/gh/mkdir) so autonomous
+  runs don't stall on approval prompts for expected, repeated commands
+- Next: M2 — worker actually generates HTTP load (VU count/duration/ramp)
+  against a target instead of just logging the job
 
 ### 2026-07-05 — Pre-M1: Project scaffolding
 - Defined purpose, audience, and positioning vs. bigger load testers (k6

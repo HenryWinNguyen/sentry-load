@@ -8,3 +8,4 @@ build/
 /coordinator/coordinator
 /worker/worker
 .DS_Store
+.claude/settings.local.json

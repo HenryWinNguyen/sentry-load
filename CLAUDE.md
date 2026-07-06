@@ -125,18 +125,16 @@ deleting branches).
 
 ## Frequently used commands
 
-This section is a placeholder until M1 lands actual code — fill in real
-commands as each part of the stack exists rather than guessing ahead of
-time.
-
 ```
-# Local dev loop (once M1 exists)
-docker compose up -d          # local Redis
-go run ./coordinator          # start coordinator
-go run ./worker               # start a worker
-go test ./...                 # run tests, from repo root or per-module
+# Local dev loop
+docker compose up -d          # local Redis (localhost:6379)
+go run ./worker                # start a worker (blocks, listens on sentry:jobs)
+go run ./coordinator           # enqueues one fake job, then exits (M1 behavior)
+go build ./...                 # build both modules (go.work covers both)
+go test ./...                  # run tests, from repo root or per-module
 
 # Repo
-gh repo create sentry-load --public --source=. --push   # one-time, initial push
+gh repo create sentry-load --public --source=. --push   # one-time, done
 gh pr create                                             # open a PR for the current branch
+gh pr merge --squash                                     # merge once verified
 ```
