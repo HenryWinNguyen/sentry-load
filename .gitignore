@@ -1,0 +1,10 @@
+.env
+.env.local
+node_modules/
+dist/
+build/
+*.exe
+*.test
+/coordinator/coordinator
+/worker/worker
+.DS_Store
