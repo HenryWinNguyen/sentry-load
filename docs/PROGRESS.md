@@ -7,12 +7,33 @@ see where the build stands without scrolling back through chat history. See
 
 ## Current status
 
-**M3 complete — V1 walking skeleton (M1-M3) fully working end to end.**
-Coordinator enqueues a job and watches live metrics stream back from the
-worker until done. Next: M4 (guinea-pig target app) and M5 (real remote
-deployment — the one step that needs Henry's own cloud account).
+**M4 complete.** Real guinea-pig target app with a genuine, verified
+fast/slow contrast. Only M5 (real remote deployment) left in V1 — the one
+step that needs Henry's own cloud account, so it's next as a checklist
+rather than something I can run autonomously.
 
 ## Log
+
+### 2026-07-05 — M4 complete: guinea-pig target app (with a bug caught and fixed)
+- `/guineapig`: new Go module, SQLite-backed, `/fast` (single JOIN query,
+  20-connection pool) vs `/slow` (intentional N+1 — one query per product
+  for its reviews — against a 2-connection pool)
+- **First version had no real bottleneck at all.** Ran the actual load
+  generator against both endpoints (not just eyeballed the code) — /slow
+  came back at identical p50/p95/p99 (~1-3ms) to /fast, and the same
+  ~500 RPS. Root cause: local SQLite against a 20-row table is fast enough
+  that 21 sequential queries still cost a fraction of a millisecond total,
+  so the tiny pool never actually contended for anything
+- Fixed by adding `simulatedQueryLatency` (4ms), applied per query in both
+  handlers equally — standing in for the network round trip a real,
+  remote database would add, which is what actually makes N+1 painful in
+  production, not local query execution time
+- Re-verified live: same test again, now /fast = 4020 requests/8s (~502
+  RPS, still capped by the safety limiter) vs /slow = 1633 requests/8s
+  (~202 RPS), p50=98ms/p95=102ms/p99=110ms. A real, dramatic, honestly-
+  earned contrast this time
+- Next: M5 — deploy coordinator + worker to real infra. Needs Henry to
+  create a cloud account first (see checklist when this comes up)
 
 ### 2026-07-05 — M3 complete: metrics aggregation and live reporting
 - `worker/metrics.go`: `computeMetrics` turns raw per-request results into

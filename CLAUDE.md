@@ -64,6 +64,13 @@ Users → │  Control API │ (Go) — auth, domain verification, job config, r
   historical/shareable reports.
 - **Queue**: Redis Streams, both directions (jobs out, results in) —
   avoids workers needing to know the coordinator's network address.
+- **Guinea-pig app** (`/guineapig`): the M1-M4 local load-test target, not
+  part of the deployed product. `/fast` (one query, 20-conn pool) vs
+  `/slow` (intentional N+1 + 2-conn pool) — see SCOPE.md decisions log for
+  why. Uses `simulatedQueryLatency` (4ms per query) to stand in for a real
+  DB's network round trip; without it, local SQLite is fast enough that
+  the N+1 pattern produced no measurable difference at all — verified,
+  not assumed, then fixed.
 
 ## Constraints and policies
 
@@ -128,9 +135,10 @@ deleting branches).
 ```
 # Local dev loop
 docker compose up -d          # local Redis (localhost:6379)
+(cd guineapig && go run .)    # load-test target: /fast (single query) vs /slow (N+1 + tiny pool), :8081
 go run ./worker                # start a worker (blocks, listens on sentry:jobs)
 go run ./coordinator           # enqueues one fake job, then exits (M1 behavior)
-go build ./...                 # build both modules (go.work covers both)
+(cd <module> && go build ./...)  # build one module (run go.work doesn't support root ./... yet)
 go test ./...                  # run tests, from repo root or per-module
 
 # Repo

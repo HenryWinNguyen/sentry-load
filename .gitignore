@@ -7,5 +7,7 @@ build/
 *.test
 /coordinator/coordinator
 /worker/worker
+/guineapig/guineapig
+/guineapig/guineapig.db*
 .DS_Store
 .claude/settings.local.json
