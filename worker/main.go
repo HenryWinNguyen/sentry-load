@@ -76,7 +76,7 @@ func main() {
 
 		for _, stream := range streams {
 			for _, msg := range stream.Messages {
-				log.Printf("received job: %v", msg.Values)
+				handleJob(ctx, msg.Values)
 				if err := rdb.XAck(ctx, jobsStream, consumerGroup, msg.ID).Err(); err != nil {
 					log.Printf("failed to ack job %s: %v", msg.ID, err)
 				}
@@ -87,4 +87,32 @@ func main() {
 
 func isBusyGroup(err error) bool {
 	return err != nil && len(err.Error()) >= 9 && err.Error()[:9] == "BUSYGROUP"
+}
+
+// handleJob parses, validates, and runs a load test for one job. It only
+// prints a basic totals summary — turning raw results into RPS/percentiles
+// and streaming them back to the coordinator is M3, not this milestone.
+func handleJob(ctx context.Context, values map[string]interface{}) {
+	job, err := parseJob(values)
+	if err != nil {
+		log.Printf("rejecting malformed job: %v", err)
+		return
+	}
+	if err := job.validate(); err != nil {
+		log.Printf("rejecting job %s: %v", job.ID, err)
+		return
+	}
+
+	log.Printf("running job %s: %s vus=%d duration=%ds pattern=%s",
+		job.ID, job.URL, job.VUs, job.DurationSeconds, job.RampPattern)
+
+	results := runLoadTest(ctx, job)
+
+	var errCount int
+	for _, r := range results {
+		if r.Err != nil {
+			errCount++
+		}
+	}
+	log.Printf("job %s done: %d requests, %d errors", job.ID, len(results), errCount)
 }
