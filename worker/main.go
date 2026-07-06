@@ -1,6 +1,6 @@
-// Command worker is the M1 walking-skeleton worker: it consumes jobs from
-// Redis Streams via a consumer group and logs them. No load generation yet
-// (see SCOPE.md M2) — this only proves the queue plumbing.
+// Command worker consumes load-test jobs from Redis Streams, generates
+// real HTTP load against each job's target, and streams live metrics
+// snapshots back to the coordinator.
 package main
 
 import (
@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 
 const (
 	jobsStream    = "sentry:jobs"
+	resultsStream = "sentry:results"
 	consumerGroup = "workers"
 )
 
@@ -76,7 +78,7 @@ func main() {
 
 		for _, stream := range streams {
 			for _, msg := range stream.Messages {
-				handleJob(ctx, msg.Values)
+				handleJob(ctx, rdb, msg.Values)
 				if err := rdb.XAck(ctx, jobsStream, consumerGroup, msg.ID).Err(); err != nil {
 					log.Printf("failed to ack job %s: %v", msg.ID, err)
 				}
@@ -89,10 +91,10 @@ func isBusyGroup(err error) bool {
 	return err != nil && len(err.Error()) >= 9 && err.Error()[:9] == "BUSYGROUP"
 }
 
-// handleJob parses, validates, and runs a load test for one job. It only
-// prints a basic totals summary — turning raw results into RPS/percentiles
-// and streaming them back to the coordinator is M3, not this milestone.
-func handleJob(ctx context.Context, values map[string]interface{}) {
+// handleJob parses, validates, and runs a load test for one job, streaming
+// a live metrics snapshot back to the coordinator roughly once per second
+// over resultsStream, plus one final snapshot with done=true.
+func handleJob(ctx context.Context, rdb *redis.Client, values map[string]interface{}) {
 	job, err := parseJob(values)
 	if err != nil {
 		log.Printf("rejecting malformed job: %v", err)
@@ -106,13 +108,23 @@ func handleJob(ctx context.Context, values map[string]interface{}) {
 	log.Printf("running job %s: %s vus=%d duration=%ds pattern=%s",
 		job.ID, job.URL, job.VUs, job.DurationSeconds, job.RampPattern)
 
-	results := runLoadTest(ctx, job)
-
-	var errCount int
-	for _, r := range results {
-		if r.Err != nil {
-			errCount++
+	publish := func(m Metrics) {
+		fields := map[string]interface{}{
+			"job_id":      m.JobID,
+			"elapsed_ms":  strconv.FormatInt(m.Elapsed.Milliseconds(), 10),
+			"requests":    strconv.Itoa(m.Requests),
+			"errors":      strconv.Itoa(m.Errors),
+			"rps":         strconv.FormatFloat(m.RPS, 'f', 1, 64),
+			"p50_ms":      strconv.FormatInt(m.P50.Milliseconds(), 10),
+			"p95_ms":      strconv.FormatInt(m.P95.Milliseconds(), 10),
+			"p99_ms":      strconv.FormatInt(m.P99.Milliseconds(), 10),
+			"done":        strconv.FormatBool(m.Done),
+		}
+		if err := rdb.XAdd(ctx, &redis.XAddArgs{Stream: resultsStream, Values: fields}).Err(); err != nil {
+			log.Printf("failed to publish metrics for job %s: %v", m.JobID, err)
 		}
 	}
-	log.Printf("job %s done: %d requests, %d errors", job.ID, len(results), errCount)
+
+	final := runLoadTest(ctx, job, publish)
+	log.Printf("job %s done: %d requests", job.ID, len(final))
 }
