@@ -53,8 +53,6 @@ different regions.
 
 ## Decisions locked so far
 
-- **Collaboration style:** I write the code, Henry reads/modifies and asks
-  "why" — optimizing for a working system over line-by-line pairing.
 - **Repo:** single monorepo — `/coordinator`, `/worker`, `/dashboard`.
 - **V1 test targets:** guinea-pig apps deployed specifically to be load-tested,
   not real side projects — zero risk while the engine is unproven.
@@ -120,7 +118,7 @@ end to end, deployed on real (free-tier) infrastructure, not just localhost.
 - Redis Streams queue between coordinator and worker
 - One worker: generates HTTP load against a target per the configured shape,
   reports RPS / latency percentiles (p50/p95/p99) / error rate back
-- Targets: fixed allowlist of guinea-pig apps Henry deploys himself
+- Targets: fixed allowlist of guinea-pig apps deployed specifically for testing
 - No auth, single-user
 - Output: terminal/log stream of live metrics + final summary
 - Deployed: coordinator + 1 worker on free-tier infra (Oracle Cloud

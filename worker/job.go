@@ -5,9 +5,9 @@ import (
 	"strconv"
 )
 
-// Hard caps, per CLAUDE.md's "hard caps always on" constraint. A job
-// exceeding these is rejected outright, not silently clamped — silently
-// under-delivering is exactly the anti-pattern SCOPE.md argues against.
+// Hard caps: always enforced. A job exceeding these is rejected outright,
+// not silently clamped — silently under-delivering is exactly the
+// anti-pattern this project's design argues against (see SCOPE.md).
 const (
 	maxVUs             = 200
 	maxDurationSeconds = 300
