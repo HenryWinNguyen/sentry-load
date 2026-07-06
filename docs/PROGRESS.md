@@ -7,10 +7,33 @@ see where the build stands without scrolling back through chat history. See
 
 ## Current status
 
-**M1 complete.** Coordinator and worker talk to each other over local Redis
-Streams. Starting M2 next: real load generation.
+**M2 complete.** Worker generates real HTTP load (steady/ramp, hard-capped)
+against a target and records raw per-request results. Starting M3 next:
+turning those into RPS/percentiles/error-rate and streaming them back to
+the coordinator.
 
 ## Log
+
+### 2026-07-05 — M2 complete: real HTTP load generation
+- `worker/job.go`: parses the job's wire fields (id/url/vus/
+  duration_seconds/ramp_pattern) and enforces hard caps (200 VUs / 300s
+  duration max) — rejects out-of-range jobs outright rather than silently
+  clamping them, per the "capacity-aware, honest about limits" positioning
+  in SCOPE.md
+- `worker/loadgen.go`: goroutine-per-VU closed-loop load generator, tuned
+  `http.Transport` (raised `MaxIdleConnsPerHost`/`MaxConnsPerHost` so the
+  client itself doesn't bottleneck), shared `golang.org/x/time/rate`
+  limiter capping aggregate RPS as a safety backstop independent of the
+  per-job caps. Supports `steady` (all VUs from t=0) and `ramp` (linear
+  0→VUs over the full duration) patterns
+- Verified all three paths manually: steady (5 VUs/3s → 1504 requests, 0
+  errors), ramp (6 VUs/3s → 1505 requests, 0 errors), and hard-cap
+  rejection (99999 VUs correctly rejected with a clear log message,
+  worker kept running)
+- Worker only prints request/error totals for now — turning raw results
+  into RPS/percentiles and streaming them back to the coordinator is M3,
+  not this milestone
+- Next: M3 — metrics aggregation and reporting back to the coordinator
 
 ### 2026-07-05 — M1 complete: coordinator/worker skeleton over local Redis
 - Installed Go 1.26.4 (Homebrew) — wasn't present on the machine
