@@ -1,0 +1,38 @@
+name: Ephemeral load-test worker
+
+# Manually triggered: this is the ephemeral worker source described in
+# SCOPE.md's hosting plan. It builds and runs the worker binary on a
+# GitHub-hosted runner for a bounded duration, pointed at the always-on
+# coordinator/Redis on the Oracle VM, then exits — no always-on worker
+# fleet needed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      redis_addr:
+        description: "host:port of the coordinator's Redis (Oracle VM public IP)"
+        required: true
+        default: "150.136.173.52:6379"
+      run_seconds:
+        description: "How long this worker stays alive before shutting down"
+        required: true
+        default: "60"
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+
+      - name: Build worker
+        run: cd worker && go build -o worker .
+
+      - name: Run worker
+        env:
+          REDIS_ADDR: ${{ inputs.redis_addr }}
+          WORKER_ID: gha-${{ github.run_id }}
+        run: timeout "${{ inputs.run_seconds }}"s ./worker/worker || true
