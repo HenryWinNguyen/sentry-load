@@ -34,11 +34,16 @@ func main() {
 		log.Fatalf("could not reach redis at %s: %v", addr, err)
 	}
 
+	targetURL := os.Getenv("TARGET_URL")
+	if targetURL == "" {
+		targetURL = "http://localhost:8081/fast"
+	}
+
 	const durationSeconds = 10
 	jobID := uuid.NewString()
 	job := map[string]interface{}{
 		"id":               jobID,
-		"url":              "http://localhost:8081/fast",
+		"url":              targetURL,
 		"vus":              strconv.Itoa(10),
 		"duration_seconds": strconv.Itoa(durationSeconds),
 		"ramp_pattern":     "steady",

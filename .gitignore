@@ -10,3 +10,4 @@ build/
 /guineapig/guineapig
 /guineapig/guineapig.db*
 .DS_Store
+/deploy/
