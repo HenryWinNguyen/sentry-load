@@ -72,11 +72,25 @@ different regions.
   library like vegeta. Bounded scope, real learning value; the whole point
   of the project is Go concurrency + distributed-systems plumbing.
 
-## Positioning vs. bigger load testers (k6 Cloud, BlazeMeter, Loader.io)
+## Positioning vs. bigger load testers (k6, JMeter, Loader.io)
 
-Not competing on scale — leaning into being small, free, and right-sized for
-the actual audience (indie devs on free-tier hosts):
+Not "we're free" — free load generators already exist (k6 OSS, JMeter,
+Locust). The actual gap, confirmed by research (July 2026), is **real
+distributed load testing without a subscription or DevOps pain**:
 
+- **k6**: single-machine only in the open-source tier — genuine
+  multi-machine distributed execution is paywalled behind Grafana Cloud.
+  Sentry Load's ephemeral multi-worker model gives this away free by
+  design, not as a limited trial.
+- **JMeter**: distributed (master-slave) setup means manually configuring
+  RMI between nodes, opening firewalls between them, keeping JMeter
+  versions in sync across every machine, and hand-coordinating start/stop
+  timing. Sentry Load's workers talk to the coordinator only through Redis
+  Streams — no worker ever needs another node's address, so there's
+  nothing to network-configure by hand as the fleet grows.
+- **Loader.io** (the closest hosted/free analog): free tier caps at **10
+  concurrent clients** and a dated interface. Sentry Load's hard cap is
+  200 VUs per test, free, with a live-updating result stream.
 - **Presets tuned to indie-launch scale**, not raw enterprise configurability:
   *Quick Check* (60s, ~50 VUs), *Launch Day* (5 min ramp to a few hundred
   VUs), *Class Demo* (steady moderate load).
@@ -84,10 +98,12 @@ the actual audience (indie devs on free-tier hosts):
   fleet capacity and refuses/warns instead of silently under-delivering when
   a requested test exceeds it — honest about limits instead of pretending to
   be enterprise-scale.
-- **No signup friction**: verify domain, go — no card, no sales call.
+- **No signup friction, no scripting**: verify domain, pick a preset, go —
+  no test-scripting API to learn, no card, no sales call.
 - **Ephemeral workers** (see hosting note below) instead of an idling 24/7
   fleet — forced by free-tier reality, but a legitimate distributed-systems
-  pattern in its own right.
+  pattern in its own right, and the same pattern that sidesteps JMeter's
+  manual node-management pain above.
 
 ## Hosting reality check (verified July 2026 — supersedes earlier assumption)
 
