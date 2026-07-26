@@ -111,6 +111,7 @@ func handleJob(ctx context.Context, rdb *redis.Client, values map[string]interfa
 	publish := func(m Metrics) {
 		fields := map[string]interface{}{
 			"job_id":      m.JobID,
+			"test_id":     job.TestID,
 			"elapsed_ms":  strconv.FormatInt(m.Elapsed.Milliseconds(), 10),
 			"requests":    strconv.Itoa(m.Requests),
 			"errors":      strconv.Itoa(m.Errors),

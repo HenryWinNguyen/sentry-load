@@ -20,6 +20,7 @@ const (
 // format, not on shared code.
 type Job struct {
 	ID              string
+	TestID          string
 	URL             string
 	VUs             int
 	DurationSeconds int
@@ -43,6 +44,9 @@ func parseJob(values map[string]interface{}) (Job, error) {
 
 	var err error
 	if job.ID, err = str("id"); err != nil {
+		return Job{}, err
+	}
+	if job.TestID, err = str("test_id"); err != nil {
 		return Job{}, err
 	}
 	if job.URL, err = str("url"); err != nil {
