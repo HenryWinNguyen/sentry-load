@@ -1,0 +1,76 @@
+package main
+
+import "testing"
+
+func TestTestStoreSnapshotUnknownID(t *testing.T) {
+	s := NewTestStore()
+	if _, ok := s.Snapshot("nope"); ok {
+		t.Fatal("expected ok=false for an unregistered test ID")
+	}
+}
+
+func TestTestStoreRegisterStartsNotDone(t *testing.T) {
+	s := NewTestStore()
+	s.Register("test-1", "http://example.com/fast", []string{"job-a", "job-b"})
+
+	snap, ok := s.Snapshot("test-1")
+	if !ok {
+		t.Fatal("expected the registered test to be found")
+	}
+	if snap.Done {
+		t.Fatal("expected a freshly-registered test to not be done")
+	}
+	if len(snap.SubJobs) != 2 {
+		t.Fatalf("got %d sub-jobs, want 2", len(snap.SubJobs))
+	}
+}
+
+func TestTestStoreUpdateMergesAndDetectsDone(t *testing.T) {
+	s := NewTestStore()
+	s.Register("test-1", "http://example.com/fast", []string{"job-a", "job-b"})
+
+	s.Update("test-1", "job-a", 100, 0, 50.0, "10", "20", "30", false)
+	snap, _ := s.Snapshot("test-1")
+	if snap.Done {
+		t.Fatal("expected not done while job-b hasn't reported yet")
+	}
+	if snap.TotalRequests != 100 || snap.CombinedRPS != 50.0 {
+		t.Fatalf("got requests=%d rps=%v, want 100/50.0", snap.TotalRequests, snap.CombinedRPS)
+	}
+
+	s.Update("test-1", "job-b", 200, 5, 75.0, "12", "22", "32", true)
+	// job-a hasn't reported done=true yet.
+	snap, _ = s.Snapshot("test-1")
+	if snap.Done {
+		t.Fatal("expected not done while job-a hasn't reported done=true")
+	}
+
+	s.Update("test-1", "job-a", 150, 1, 55.0, "10", "20", "30", true)
+	snap, _ = s.Snapshot("test-1")
+	if !snap.Done {
+		t.Fatal("expected done once every sub-job reports done=true")
+	}
+	if snap.TotalRequests != 350 {
+		t.Fatalf("got total requests %d, want 350", snap.TotalRequests)
+	}
+	if snap.TotalErrors != 6 {
+		t.Fatalf("got total errors %d, want 6", snap.TotalErrors)
+	}
+	if snap.CombinedRPS != 130.0 {
+		t.Fatalf("got combined rps %v, want 130.0", snap.CombinedRPS)
+	}
+}
+
+func TestTestStoreUpdateIgnoresUnknownIDs(t *testing.T) {
+	s := NewTestStore()
+	s.Register("test-1", "http://example.com/fast", []string{"job-a"})
+
+	// Neither call should panic or affect the registered test.
+	s.Update("unknown-test", "job-a", 999, 0, 0, "", "", "", true)
+	s.Update("test-1", "unknown-job", 999, 0, 0, "", "", "", true)
+
+	snap, _ := s.Snapshot("test-1")
+	if snap.TotalRequests != 0 {
+		t.Fatalf("got total requests %d, want 0 (stray updates should be ignored)", snap.TotalRequests)
+	}
+}
