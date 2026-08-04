@@ -203,6 +203,11 @@ end to end, deployed on real (free-tier) infrastructure, not just localhost.
   one test across both and merges results.
 - **M7** — Domain-ownership verification (DNS TXT / well-known file) gating
   non-allowlisted targets.
+- **M7.5** — Coordinator becomes an always-on HTTP service (job
+  submission/status + domain-verification endpoints), pulled forward from
+  M10 — added once M7 landed with nothing yet to gate, since the
+  coordinator was still a run-once CLI binary. The WebSocket/Postgres parts
+  of M10 stay where they are.
 - **M8** — GitHub OAuth; tests scoped to a user.
 - **M9** — Abuse guardrails: hard caps on VUs/duration/RPS, per-user
   cooldown, circuit breaker to abort if target error rate spikes.
@@ -219,7 +224,15 @@ end to end, deployed on real (free-tier) infrastructure, not just localhost.
 
 ## Open questions for next session
 
-- Exact free-tier provider(s) for worker hosting (GitHub Actions vs. GCP
-  e2-micro vs. both) — decide hands-on at M5/M6.
 - Repo visibility (public vs. private) — affects whether GitHub Actions
   minutes are free (public repos get unlimited free minutes).
+
+## Resolved
+
+- Worker hosting: GitHub Actions (ephemeral runner) + a GCP e2-micro
+  Always Free VM, confirmed hands-on at M6 with a real cross-provider
+  test — both stay as the two worker sources.
+- Job-submission API surface (M7.5): coordinator is now an always-on HTTP
+  service (`POST /domains`, `POST /domains/{domain}/verify`, `POST /tests`,
+  `GET /tests/{id}`) rather than a run-once CLI binary — decided once M7's
+  verification logic had nothing to actually gate.
