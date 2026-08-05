@@ -131,3 +131,133 @@ func TestTestStoreCooldownRemaining(t *testing.T) {
 		t.Fatalf("got remaining %v, want 0 when the cooldown itself is disabled (zero)", remaining)
 	}
 }
+
+func TestTestStoreUpdateReportsJustFinished(t *testing.T) {
+	s := NewTestStore()
+	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a", "job-b"})
+
+	if finished := s.Update("test-1", "job-a", 100, 0, 50.0, "10", "20", "30", false, false); finished {
+		t.Fatal("expected justFinished=false while job-a isn't even done yet")
+	}
+	if finished := s.Update("test-1", "job-a", 150, 0, 50.0, "10", "20", "30", true, false); finished {
+		t.Fatal("expected justFinished=false while job-b hasn't reported done yet")
+	}
+	if finished := s.Update("test-1", "job-b", 200, 0, 60.0, "10", "20", "30", true, false); !finished {
+		t.Fatal("expected justFinished=true the moment the last sub-job reports done")
+	}
+	// A later, redundant "done" message for the same test shouldn't
+	// re-trigger — it already transitioned once.
+	if finished := s.Update("test-1", "job-b", 200, 0, 60.0, "10", "20", "30", true, false); finished {
+		t.Fatal("expected justFinished=false on a repeat done message")
+	}
+}
+
+func TestTestStoreUpdateJustFinishedIgnoresUnknownIDs(t *testing.T) {
+	s := NewTestStore()
+	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a"})
+
+	if finished := s.Update("unknown-test", "job-a", 1, 0, 1, "", "", "", true, false); finished {
+		t.Fatal("expected justFinished=false for an unknown test")
+	}
+	if finished := s.Update("test-1", "unknown-job", 1, 0, 1, "", "", "", true, false); finished {
+		t.Fatal("expected justFinished=false for an unknown sub-job")
+	}
+}
+
+func TestTestStoreSnapshotUnscoped(t *testing.T) {
+	s := NewTestStore()
+	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a"})
+
+	snap, ownerID, ok := s.snapshotUnscoped("test-1")
+	if !ok {
+		t.Fatal("expected the registered test to be found")
+	}
+	if ownerID != "user-1" {
+		t.Fatalf("got ownerID %q, want user-1", ownerID)
+	}
+	if snap.TestID != "test-1" {
+		t.Fatalf("got test ID %q, want test-1", snap.TestID)
+	}
+
+	if _, _, ok := s.snapshotUnscoped("nope"); ok {
+		t.Fatal("expected ok=false for an unregistered test ID")
+	}
+}
+
+func TestTestStoreSubscribeReceivesUpdates(t *testing.T) {
+	s := NewTestStore()
+	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a"})
+
+	ch, unsubscribe := s.Subscribe("test-1")
+	defer unsubscribe()
+
+	s.Update("test-1", "job-a", 100, 0, 50.0, "10", "20", "30", false, false)
+
+	select {
+	case snap := <-ch:
+		if snap.TotalRequests != 100 {
+			t.Fatalf("got total requests %d, want 100", snap.TotalRequests)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for a subscriber update")
+	}
+}
+
+func TestTestStoreSubscribeUnrelatedTestDoesNotNotify(t *testing.T) {
+	s := NewTestStore()
+	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a"})
+	s.Register("test-2", "user-1", "http://example.com/fast", []string{"job-b"})
+
+	ch, unsubscribe := s.Subscribe("test-1")
+	defer unsubscribe()
+
+	s.Update("test-2", "job-b", 50, 0, 10.0, "1", "2", "3", true, false)
+
+	select {
+	case snap := <-ch:
+		t.Fatalf("expected no update for an unrelated test, got %+v", snap)
+	case <-time.After(50 * time.Millisecond):
+		// expected: nothing arrived
+	}
+}
+
+func TestTestStoreUnsubscribeStopsUpdatesAndClosesChannel(t *testing.T) {
+	s := NewTestStore()
+	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a"})
+
+	ch, unsubscribe := s.Subscribe("test-1")
+	unsubscribe()
+
+	if _, open := <-ch; open {
+		t.Fatal("expected the channel to be closed after unsubscribe")
+	}
+
+	// Must not panic even though nothing is reading it anymore.
+	s.Update("test-1", "job-a", 100, 0, 50.0, "10", "20", "30", true, false)
+}
+
+func TestTestStoreSubscribeDoesNotBlockOnFullChannel(t *testing.T) {
+	s := NewTestStore()
+	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a"})
+
+	ch, unsubscribe := s.Subscribe("test-1")
+	defer unsubscribe()
+
+	// Never drain the channel — fill it well past its buffer and confirm
+	// Update() keeps returning instead of blocking forever on a stalled
+	// subscriber.
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 20; i++ {
+			s.Update("test-1", "job-a", i, 0, 1.0, "1", "2", "3", false, false)
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Update() blocked on a full subscriber channel instead of dropping the update")
+	}
+	<-ch // drain one, just to use the channel and avoid an unused-var-style lint complaint
+}

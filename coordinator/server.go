@@ -23,7 +23,8 @@ type ServerConfig struct {
 	OAuthExchange     oauthExchanger
 	GitHubUsers       githubUserFetcher
 
-	TestCooldown time.Duration // minimum spacing between one user's test submissions (M9); zero disables it
+	TestCooldown time.Duration    // minimum spacing between one user's test submissions (M9); zero disables it
+	History      testHistoryStore // nil disables /tests history persistence/listing (M10) — Postgres not configured
 }
 
 // NewServer wires the coordinator's HTTP API surface: GitHub login (M8),
@@ -45,6 +46,7 @@ func NewServer(cfg ServerConfig) http.Handler {
 		oauthExchange:     cfg.OAuthExchange,
 		githubUsers:       cfg.GitHubUsers,
 		testCooldown:      cfg.TestCooldown,
+		history:           cfg.History,
 	}
 
 	mux := http.NewServeMux()
@@ -54,6 +56,11 @@ func NewServer(cfg ServerConfig) http.Handler {
 	mux.HandleFunc("POST /domains", s.requireAuth(s.handleCreateDomainChallenge))
 	mux.HandleFunc("POST /domains/{domain}/verify", s.requireAuth(s.handleVerifyDomain))
 	mux.HandleFunc("POST /tests", s.requireAuth(s.handleCreateTest))
+	mux.HandleFunc("GET /tests", s.requireAuth(s.handleListTests))
 	mux.HandleFunc("GET /tests/{id}", s.requireAuth(s.handleGetTest))
+	// Not wrapped in requireAuth: browsers can't set custom headers on a
+	// WebSocket handshake, so this route does its own query-param-based
+	// auth instead (see live.go).
+	mux.HandleFunc("GET /tests/{id}/live", s.handleTestLive)
 	return mux
 }

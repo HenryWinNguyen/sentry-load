@@ -72,7 +72,20 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go watchResults(ctx, rdb, tests)
+
+	var history testHistoryStore
+	if url := os.Getenv("POSTGRES_URL"); url != "" {
+		h, err := newPostgresHistory(ctx, url)
+		if err != nil {
+			log.Fatalf("failed to connect to postgres: %v", err)
+		}
+		defer h.Close()
+		history = h
+	} else {
+		log.Print("POSTGRES_URL not set — test history (GET /tests) disabled, rest of the API still works")
+	}
+
+	go watchResults(ctx, rdb, tests, history)
 
 	handler := NewServer(ServerConfig{
 		Enqueuer:          enqueuer,
@@ -87,6 +100,7 @@ func main() {
 		OAuthExchange:     githubClient,
 		GitHubUsers:       githubClient,
 		TestCooldown:      testCooldown,
+		History:           history,
 	})
 	srv := &http.Server{Addr: ":" + port, Handler: handler}
 

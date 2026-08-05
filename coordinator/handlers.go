@@ -35,6 +35,7 @@ type apiServer struct {
 	githubUsers       githubUserFetcher
 
 	testCooldown time.Duration
+	history      testHistoryStore // nil if Postgres isn't configured (M10)
 }
 
 type errorResponse struct {
@@ -346,8 +347,14 @@ func (s *apiServer) handleCreateTest(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetTest returns the current merged status of a previously
-// submitted test — poll this until done=true. Scoped to the caller: a test
-// belonging to someone else 404s exactly like an unknown ID would.
+// submitted test — poll this until done=true, or use GET /tests/{id}/live
+// for push updates instead. Scoped to the caller: a test belonging to
+// someone else 404s exactly like an unknown ID would.
+//
+// Checks the in-memory TestStore first (covers anything still running or
+// recently finished), falling back to Postgres (M10) for a test that
+// finished before a restart — if Postgres isn't configured, only the
+// in-memory view is available.
 func (s *apiServer) handleGetTest(w http.ResponseWriter, r *http.Request) {
 	user, ok := userFromContext(r.Context())
 	if !ok {
@@ -356,10 +363,52 @@ func (s *apiServer) handleGetTest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := r.PathValue("id")
-	snap, ok := s.tests.Snapshot(id, user.ID)
-	if !ok {
-		writeError(w, http.StatusNotFound, "unknown test id")
+	if snap, ok := s.tests.Snapshot(id, user.ID); ok {
+		writeJSON(w, http.StatusOK, snap)
 		return
 	}
-	writeJSON(w, http.StatusOK, snap)
+
+	if s.history != nil {
+		snap, ok, err := s.history.Get(r.Context(), id, user.ID)
+		if err != nil {
+			log.Printf("failed to load test %s from history: %v", id, err)
+			writeError(w, http.StatusInternalServerError, "failed to load test")
+			return
+		}
+		if ok {
+			writeJSON(w, http.StatusOK, snap)
+			return
+		}
+	}
+
+	writeError(w, http.StatusNotFound, "unknown test id")
+}
+
+const testHistoryListLimit = 50
+
+// handleListTests returns the caller's most recent finished tests, newest
+// first. Requires Postgres (M10) — there's no in-memory equivalent to fall
+// back to, since TestStore doesn't keep a bounded history, just whatever's
+// currently tracked.
+func (s *apiServer) handleListTests(w http.ResponseWriter, r *http.Request) {
+	user, ok := userFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if s.history == nil {
+		writeError(w, http.StatusNotImplemented, "test history is not available (Postgres not configured on this server)")
+		return
+	}
+
+	snaps, err := s.history.List(r.Context(), user.ID, testHistoryListLimit)
+	if err != nil {
+		log.Printf("failed to list test history for %s: %v", user.ID, err)
+		writeError(w, http.StatusInternalServerError, "failed to load test history")
+		return
+	}
+	if snaps == nil {
+		snaps = []TestSnapshot{}
+	}
+	writeJSON(w, http.StatusOK, snaps)
 }

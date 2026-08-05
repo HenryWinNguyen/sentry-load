@@ -17,7 +17,11 @@ const resultsStream = "sentry:results"
 // per-CLI-invocation watcher, this handles however many tests are in
 // flight concurrently, since the coordinator is now a long-running service
 // rather than a run-once binary.
-func watchResults(ctx context.Context, rdb *redis.Client, store *TestStore) {
+//
+// history may be nil (Postgres not configured, M10's persistence layer is
+// optional local-dev-friendly like GitHub OAuth in M8) — a finished test
+// is persisted here, once, right when its last sub-job reports done.
+func watchResults(ctx context.Context, rdb *redis.Client, store *TestStore, history testHistoryStore) {
 	lastID := "$" // only entries added after the watcher starts
 	for {
 		select {
@@ -41,8 +45,9 @@ func watchResults(ctx context.Context, rdb *redis.Client, store *TestStore) {
 		for _, stream := range streams {
 			for _, msg := range stream.Messages {
 				lastID = msg.ID
-				store.Update(
-					strField(msg.Values["test_id"]),
+				testID := strField(msg.Values["test_id"])
+				justFinished := store.Update(
+					testID,
 					strField(msg.Values["job_id"]),
 					intField(msg.Values["requests"]),
 					intField(msg.Values["errors"]),
@@ -53,7 +58,22 @@ func watchResults(ctx context.Context, rdb *redis.Client, store *TestStore) {
 					msg.Values["done"] == "true",
 					msg.Values["circuit_broken"] == "true",
 				)
+				if justFinished && history != nil {
+					saveFinishedTest(ctx, store, history, testID)
+				}
 			}
 		}
+	}
+}
+
+func saveFinishedTest(ctx context.Context, store *TestStore, history testHistoryStore, testID string) {
+	snap, ownerID, ok := store.snapshotUnscoped(testID)
+	if !ok {
+		return
+	}
+	saveCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := history.Save(saveCtx, snap, ownerID); err != nil {
+		log.Printf("failed to persist finished test %s: %v", testID, err)
 	}
 }
