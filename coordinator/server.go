@@ -1,6 +1,9 @@
 package main
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
 
 // ServerConfig is everything NewServer needs to wire up the coordinator's
 // HTTP API. A struct instead of a long parameter list since M8 pushed this
@@ -19,6 +22,8 @@ type ServerConfig struct {
 	GitHubRedirectURL string
 	OAuthExchange     oauthExchanger
 	GitHubUsers       githubUserFetcher
+
+	TestCooldown time.Duration // minimum spacing between one user's test submissions (M9); zero disables it
 }
 
 // NewServer wires the coordinator's HTTP API surface: GitHub login (M8),
@@ -39,6 +44,7 @@ func NewServer(cfg ServerConfig) http.Handler {
 		githubRedirectURL: cfg.GitHubRedirectURL,
 		oauthExchange:     cfg.OAuthExchange,
 		githubUsers:       cfg.GitHubUsers,
+		testCooldown:      cfg.TestCooldown,
 	}
 
 	mux := http.NewServeMux()

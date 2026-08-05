@@ -9,15 +9,38 @@ import (
 // Sent to the coordinator repeatedly while the test runs, and once more
 // with Done=true at the end.
 type Metrics struct {
-	JobID    string
-	Elapsed  time.Duration
-	Requests int
-	Errors   int
-	RPS      float64
-	P50      time.Duration
-	P95      time.Duration
-	P99      time.Duration
-	Done     bool
+	JobID         string
+	Elapsed       time.Duration
+	Requests      int
+	Errors        int
+	RPS           float64
+	P50           time.Duration
+	P95           time.Duration
+	P99           time.Duration
+	Done          bool
+	CircuitBroken bool // true if the run was aborted early — see tripsCircuitBreaker
+}
+
+// Hard floor/threshold for the abuse-guardrail circuit breaker (M9): once a
+// sub-job has at least circuitBreakerMinSamples requests in, an error rate
+// at or above circuitBreakerErrorRateThreshold aborts the run early rather
+// than grinding through the full configured duration against a target
+// that's clearly down. The minimum sample size exists so a handful of
+// early failures (e.g. connection warm-up) can't trip it on noise alone.
+const (
+	circuitBreakerMinSamples         = 20
+	circuitBreakerErrorRateThreshold = 0.5
+)
+
+func errorRate(m Metrics) float64 {
+	if m.Requests == 0 {
+		return 0
+	}
+	return float64(m.Errors) / float64(m.Requests)
+}
+
+func tripsCircuitBreaker(m Metrics) bool {
+	return m.Requests >= circuitBreakerMinSamples && errorRate(m) >= circuitBreakerErrorRateThreshold
 }
 
 // computeMetrics summarizes results collected so far. A request counts as

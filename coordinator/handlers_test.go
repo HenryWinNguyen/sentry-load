@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 )
 
 type fakeEnqueuer struct {
@@ -75,6 +76,33 @@ type testServer struct {
 func newTestServer(t *testing.T, enqueuer jobEnqueuer, resolver txtLookuper, httpClient httpGetter) *testServer {
 	t.Helper()
 	return newTestServerWithOAuth(t, enqueuer, resolver, httpClient, &fakeOAuthExchanger{accessToken: "gh-token"}, &fakeGitHubUserFetcher{githubID: 1, githubLogin: "henry"})
+}
+
+// newTestServerWithCooldown is like newTestServer but with a configurable
+// per-user test-submission cooldown (M9), for tests that need to observe
+// the 429 path without waiting out the real default.
+func newTestServerWithCooldown(t *testing.T, enqueuer jobEnqueuer, cooldown time.Duration) *testServer {
+	t.Helper()
+	domains := NewDomainStore()
+	tests := NewTestStore()
+	users := NewUserStore()
+	handler := NewServer(ServerConfig{
+		Enqueuer:          enqueuer,
+		Tests:             tests,
+		Domains:           domains,
+		Allowlist:         map[string]bool{"allowed.example.com": true},
+		Resolver:          fakeResolver{},
+		HTTPClient:        http.DefaultClient,
+		Users:             users,
+		GitHubClientID:    "test-client-id",
+		GitHubRedirectURL: "http://localhost/auth/github/callback",
+		OAuthExchange:     &fakeOAuthExchanger{accessToken: "gh-token"},
+		GitHubUsers:       &fakeGitHubUserFetcher{githubID: 1, githubLogin: "henry"},
+		TestCooldown:      cooldown,
+	})
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	return &testServer{Server: server, domains: domains, tests: tests, users: users}
 }
 
 func newTestServerWithOAuth(t *testing.T, enqueuer jobEnqueuer, resolver txtLookuper, httpClient httpGetter, exchanger oauthExchanger, fetcher githubUserFetcher) *testServer {
@@ -497,6 +525,63 @@ func TestHandleCreateTestClampsFanoutToVUs(t *testing.T) {
 	})
 	if enqueuer.lastFanout != 1 {
 		t.Fatalf("got fanout %d, want 1 (clamped to VUs)", enqueuer.lastFanout)
+	}
+}
+
+func TestHandleCreateTestEnforcesCooldown(t *testing.T) {
+	enqueuer := &fakeEnqueuer{testID: "test-1", subJobIDs: []string{"job-a"}}
+	server := newTestServerWithCooldown(t, enqueuer, time.Minute)
+	token := server.login(t)
+
+	body := createTestRequest{URL: "http://allowed.example.com/fast", VUs: 5, DurationSeconds: 5, RampPattern: "steady"}
+
+	first := authedRequest(t, http.MethodPost, server.URL+"/tests", token, body)
+	if first.StatusCode != http.StatusAccepted {
+		t.Fatalf("first submission: got status %d, want 202", first.StatusCode)
+	}
+
+	second := authedRequest(t, http.MethodPost, server.URL+"/tests", token, body)
+	if second.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("second submission: got status %d, want 429", second.StatusCode)
+	}
+	if retryAfter := second.Header.Get("Retry-After"); retryAfter == "" {
+		t.Error("expected a Retry-After header on a 429")
+	}
+	if enqueuer.calls != 1 {
+		t.Fatalf("got %d enqueuer calls, want 1 (the second submission should never reach it)", enqueuer.calls)
+	}
+}
+
+func TestHandleCreateTestCooldownIsPerUser(t *testing.T) {
+	enqueuer := &fakeEnqueuer{testID: "test-1", subJobIDs: []string{"job-a"}}
+	server := newTestServerWithCooldown(t, enqueuer, time.Minute)
+	body := createTestRequest{URL: "http://allowed.example.com/fast", VUs: 5, DurationSeconds: 5, RampPattern: "steady"}
+
+	userA, err := server.users.FindOrCreate(1, "user-a")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tokenA, err := server.users.IssueSession(userA.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	userB, err := server.users.FindOrCreate(2, "user-b")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tokenB, err := server.users.IssueSession(userB.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	respA := authedRequest(t, http.MethodPost, server.URL+"/tests", tokenA, body)
+	if respA.StatusCode != http.StatusAccepted {
+		t.Fatalf("user A: got status %d, want 202", respA.StatusCode)
+	}
+
+	respB := authedRequest(t, http.MethodPost, server.URL+"/tests", tokenB, body)
+	if respB.StatusCode != http.StatusAccepted {
+		t.Fatalf("user B: got status %d, want 202 (a different user's cooldown shouldn't apply)", respB.StatusCode)
 	}
 }
 

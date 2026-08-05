@@ -51,6 +51,7 @@ func watchResults(ctx context.Context, rdb *redis.Client, store *TestStore) {
 					strField(msg.Values["p95_ms"]),
 					strField(msg.Values["p99_ms"]),
 					msg.Values["done"] == "true",
+					msg.Values["circuit_broken"] == "true",
 				)
 			}
 		}

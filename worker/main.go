@@ -110,16 +110,17 @@ func handleJob(ctx context.Context, rdb *redis.Client, values map[string]interfa
 
 	publish := func(m Metrics) {
 		fields := map[string]interface{}{
-			"job_id":      m.JobID,
-			"test_id":     job.TestID,
-			"elapsed_ms":  strconv.FormatInt(m.Elapsed.Milliseconds(), 10),
-			"requests":    strconv.Itoa(m.Requests),
-			"errors":      strconv.Itoa(m.Errors),
-			"rps":         strconv.FormatFloat(m.RPS, 'f', 1, 64),
-			"p50_ms":      strconv.FormatInt(m.P50.Milliseconds(), 10),
-			"p95_ms":      strconv.FormatInt(m.P95.Milliseconds(), 10),
-			"p99_ms":      strconv.FormatInt(m.P99.Milliseconds(), 10),
-			"done":        strconv.FormatBool(m.Done),
+			"job_id":         m.JobID,
+			"test_id":        job.TestID,
+			"elapsed_ms":     strconv.FormatInt(m.Elapsed.Milliseconds(), 10),
+			"requests":       strconv.Itoa(m.Requests),
+			"errors":         strconv.Itoa(m.Errors),
+			"rps":            strconv.FormatFloat(m.RPS, 'f', 1, 64),
+			"p50_ms":         strconv.FormatInt(m.P50.Milliseconds(), 10),
+			"p95_ms":         strconv.FormatInt(m.P95.Milliseconds(), 10),
+			"p99_ms":         strconv.FormatInt(m.P99.Milliseconds(), 10),
+			"done":           strconv.FormatBool(m.Done),
+			"circuit_broken": strconv.FormatBool(m.CircuitBroken),
 		}
 		if err := rdb.XAdd(ctx, &redis.XAddArgs{Stream: resultsStream, Values: fields}).Err(); err != nil {
 			log.Printf("failed to publish metrics for job %s: %v", m.JobID, err)

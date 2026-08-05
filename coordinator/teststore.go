@@ -14,6 +14,7 @@ type subJobState struct {
 	rps           float64
 	p50, p95, p99 string
 	done          bool
+	circuitBroken bool // aborted early by the worker's error-rate breaker (M9)
 }
 
 // TestState is the full in-memory record of one submitted test: which
@@ -27,21 +28,27 @@ type TestState struct {
 }
 
 // TestStore tracks every test the coordinator has accepted since it last
-// restarted. In-memory only, same tradeoff as DomainStore — losing this on
-// restart loses in-flight test visibility, not correctness; persisting to
-// Postgres is M10's job, not before.
+// restarted, plus when each user last submitted one (for the M9 cooldown).
+// In-memory only, same tradeoff as DomainStore — losing this on restart
+// loses in-flight test visibility, not correctness; persisting to Postgres
+// is M10's job, not before.
 type TestStore struct {
-	mu    sync.Mutex
-	tests map[string]*TestState
+	mu            sync.Mutex
+	tests         map[string]*TestState
+	lastSubmitted map[string]time.Time // ownerID -> last Register call
 }
 
 func NewTestStore() *TestStore {
-	return &TestStore{tests: make(map[string]*TestState)}
+	return &TestStore{
+		tests:         make(map[string]*TestState),
+		lastSubmitted: make(map[string]time.Time),
+	}
 }
 
 // Register records a newly-enqueued test and its sub-job IDs so incoming
-// result snapshots (keyed by test_id/job_id) have somewhere to land.
-// ownerID scopes the test to whichever user submitted it (M8).
+// result snapshots (keyed by test_id/job_id) have somewhere to land, and
+// stamps ownerID's cooldown clock. ownerID scopes the test to whichever
+// user submitted it (M8).
 func (s *TestStore) Register(testID, ownerID, url string, jobIDs []string) {
 	state := &TestState{
 		TestID:    testID,
@@ -57,6 +64,25 @@ func (s *TestStore) Register(testID, ownerID, url string, jobIDs []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tests[testID] = state
+	s.lastSubmitted[ownerID] = state.CreatedAt
+}
+
+// CooldownRemaining reports how much longer ownerID must wait before
+// submitting another test, given cooldown as the minimum spacing between
+// submissions. Zero (or negative) means they're clear to submit now.
+func (s *TestStore) CooldownRemaining(ownerID string, cooldown time.Duration) time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	last, ok := s.lastSubmitted[ownerID]
+	if !ok {
+		return 0
+	}
+	elapsed := time.Since(last)
+	if elapsed >= cooldown {
+		return 0
+	}
+	return cooldown - elapsed
 }
 
 // Update applies one results-stream snapshot for a sub-job of a test.
@@ -64,7 +90,7 @@ func (s *TestStore) Register(testID, ownerID, url string, jobIDs []string) {
 // stream is shared, so a snapshot for a test this store never registered
 // (e.g. a stray CLI run, or a test from before a restart) is expected, not
 // a bug.
-func (s *TestStore) Update(testID, jobID string, requests, errors int, rps float64, p50, p95, p99 string, done bool) {
+func (s *TestStore) Update(testID, jobID string, requests, errors int, rps float64, p50, p95, p99 string, done, circuitBroken bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -79,18 +105,20 @@ func (s *TestStore) Update(testID, jobID string, requests, errors int, rps float
 	sj.requests, sj.errors, sj.rps = requests, errors, rps
 	sj.p50, sj.p95, sj.p99 = p50, p95, p99
 	sj.done = done
+	sj.circuitBroken = circuitBroken
 }
 
 // SubJobSnapshot is the JSON-friendly view of one sub-job's latest state.
 type SubJobSnapshot struct {
-	JobID    string  `json:"job_id"`
-	Requests int     `json:"requests"`
-	Errors   int     `json:"errors"`
-	RPS      float64 `json:"rps"`
-	P50MS    string  `json:"p50_ms"`
-	P95MS    string  `json:"p95_ms"`
-	P99MS    string  `json:"p99_ms"`
-	Done     bool    `json:"done"`
+	JobID         string  `json:"job_id"`
+	Requests      int     `json:"requests"`
+	Errors        int     `json:"errors"`
+	RPS           float64 `json:"rps"`
+	P50MS         string  `json:"p50_ms"`
+	P95MS         string  `json:"p95_ms"`
+	P99MS         string  `json:"p99_ms"`
+	Done          bool    `json:"done"`
+	CircuitBroken bool    `json:"circuit_broken"`
 }
 
 // TestSnapshot is the JSON-friendly view of a whole test: merged totals
@@ -103,6 +131,7 @@ type TestSnapshot struct {
 	TestID        string           `json:"test_id"`
 	URL           string           `json:"url"`
 	Done          bool             `json:"done"`
+	CircuitBroken bool             `json:"circuit_broken"` // true if any sub-job aborted early (M9)
 	TotalRequests int              `json:"total_requests"`
 	TotalErrors   int              `json:"total_errors"`
 	CombinedRPS   float64          `json:"combined_rps"`
@@ -125,20 +154,24 @@ func (s *TestStore) Snapshot(testID, ownerID string) (TestSnapshot, bool) {
 	snap := TestSnapshot{TestID: t.TestID, URL: t.URL, Done: true}
 	for jobID, sj := range t.SubJobs {
 		snap.SubJobs = append(snap.SubJobs, SubJobSnapshot{
-			JobID:    jobID,
-			Requests: sj.requests,
-			Errors:   sj.errors,
-			RPS:      sj.rps,
-			P50MS:    sj.p50,
-			P95MS:    sj.p95,
-			P99MS:    sj.p99,
-			Done:     sj.done,
+			JobID:         jobID,
+			Requests:      sj.requests,
+			Errors:        sj.errors,
+			RPS:           sj.rps,
+			P50MS:         sj.p50,
+			P95MS:         sj.p95,
+			P99MS:         sj.p99,
+			Done:          sj.done,
+			CircuitBroken: sj.circuitBroken,
 		})
 		snap.TotalRequests += sj.requests
 		snap.TotalErrors += sj.errors
 		snap.CombinedRPS += sj.rps
 		if !sj.done {
 			snap.Done = false
+		}
+		if sj.circuitBroken {
+			snap.CircuitBroken = true
 		}
 	}
 	sort.Slice(snap.SubJobs, func(i, j int) bool { return snap.SubJobs[i].JobID < snap.SubJobs[j].JobID })
