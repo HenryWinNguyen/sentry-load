@@ -11,12 +11,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
+
+const defaultTestCooldown = 30 * time.Second
 
 func main() {
 	addr := os.Getenv("REDIS_ADDR")
@@ -58,6 +61,15 @@ func main() {
 		httpClient:   http.DefaultClient,
 	}
 
+	testCooldown := defaultTestCooldown
+	if v := os.Getenv("TEST_COOLDOWN_SECONDS"); v != "" {
+		secs, err := strconv.Atoi(v)
+		if err != nil || secs < 0 {
+			log.Fatalf("invalid TEST_COOLDOWN_SECONDS %q: must be a non-negative integer", v)
+		}
+		testCooldown = time.Duration(secs) * time.Second
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go watchResults(ctx, rdb, tests)
@@ -74,6 +86,7 @@ func main() {
 		GitHubRedirectURL: githubRedirectURL,
 		OAuthExchange:     githubClient,
 		GitHubUsers:       githubClient,
+		TestCooldown:      testCooldown,
 	})
 	srv := &http.Server{Addr: ":" + port, Handler: handler}
 

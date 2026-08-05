@@ -7,7 +7,9 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // jobEnqueuer is the subset of enqueueing behavior handlers depend on,
@@ -31,6 +33,8 @@ type apiServer struct {
 	githubRedirectURL string
 	oauthExchange     oauthExchanger
 	githubUsers       githubUserFetcher
+
+	testCooldown time.Duration
 }
 
 type errorResponse struct {
@@ -277,6 +281,12 @@ func (s *apiServer) handleCreateTest(w http.ResponseWriter, r *http.Request) {
 	user, ok := userFromContext(r.Context())
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	if remaining := s.tests.CooldownRemaining(user.ID, s.testCooldown); remaining > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int(remaining.Seconds())+1))
+		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("submitting too fast; wait %s before your next test", remaining.Round(time.Second)))
 		return
 	}
 

@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestTestStoreSnapshotUnknownID(t *testing.T) {
 	s := NewTestStore()
@@ -41,7 +44,7 @@ func TestTestStoreUpdateMergesAndDetectsDone(t *testing.T) {
 	s := NewTestStore()
 	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a", "job-b"})
 
-	s.Update("test-1", "job-a", 100, 0, 50.0, "10", "20", "30", false)
+	s.Update("test-1", "job-a", 100, 0, 50.0, "10", "20", "30", false, false)
 	snap, _ := s.Snapshot("test-1", "user-1")
 	if snap.Done {
 		t.Fatal("expected not done while job-b hasn't reported yet")
@@ -50,14 +53,14 @@ func TestTestStoreUpdateMergesAndDetectsDone(t *testing.T) {
 		t.Fatalf("got requests=%d rps=%v, want 100/50.0", snap.TotalRequests, snap.CombinedRPS)
 	}
 
-	s.Update("test-1", "job-b", 200, 5, 75.0, "12", "22", "32", true)
+	s.Update("test-1", "job-b", 200, 5, 75.0, "12", "22", "32", true, false)
 	// job-a hasn't reported done=true yet.
 	snap, _ = s.Snapshot("test-1", "user-1")
 	if snap.Done {
 		t.Fatal("expected not done while job-a hasn't reported done=true")
 	}
 
-	s.Update("test-1", "job-a", 150, 1, 55.0, "10", "20", "30", true)
+	s.Update("test-1", "job-a", 150, 1, 55.0, "10", "20", "30", true, false)
 	snap, _ = s.Snapshot("test-1", "user-1")
 	if !snap.Done {
 		t.Fatal("expected done once every sub-job reports done=true")
@@ -78,11 +81,53 @@ func TestTestStoreUpdateIgnoresUnknownIDs(t *testing.T) {
 	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a"})
 
 	// Neither call should panic or affect the registered test.
-	s.Update("unknown-test", "job-a", 999, 0, 0, "", "", "", true)
-	s.Update("test-1", "unknown-job", 999, 0, 0, "", "", "", true)
+	s.Update("unknown-test", "job-a", 999, 0, 0, "", "", "", true, false)
+	s.Update("test-1", "unknown-job", 999, 0, 0, "", "", "", true, false)
 
 	snap, _ := s.Snapshot("test-1", "user-1")
 	if snap.TotalRequests != 0 {
 		t.Fatalf("got total requests %d, want 0 (stray updates should be ignored)", snap.TotalRequests)
+	}
+}
+
+func TestTestStoreUpdatePropagatesCircuitBroken(t *testing.T) {
+	s := NewTestStore()
+	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a", "job-b"})
+
+	s.Update("test-1", "job-a", 50, 40, 10.0, "10", "20", "30", true, true)
+	s.Update("test-1", "job-b", 100, 1, 20.0, "10", "20", "30", true, false)
+
+	snap, _ := s.Snapshot("test-1", "user-1")
+	if !snap.CircuitBroken {
+		t.Fatal("expected the test-level flag to be set once any sub-job trips the breaker")
+	}
+	for _, sj := range snap.SubJobs {
+		want := sj.JobID == "job-a"
+		if sj.CircuitBroken != want {
+			t.Errorf("sub-job %s: got circuit_broken=%v, want %v", sj.JobID, sj.CircuitBroken, want)
+		}
+	}
+}
+
+func TestTestStoreCooldownRemaining(t *testing.T) {
+	s := NewTestStore()
+
+	if remaining := s.CooldownRemaining("user-1", 30*time.Second); remaining != 0 {
+		t.Fatalf("got remaining %v, want 0 for a user who has never submitted", remaining)
+	}
+
+	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a"})
+
+	remaining := s.CooldownRemaining("user-1", 30*time.Second)
+	if remaining <= 0 || remaining > 30*time.Second {
+		t.Fatalf("got remaining %v, want something in (0s, 30s] right after submitting", remaining)
+	}
+
+	if remaining := s.CooldownRemaining("user-2", 30*time.Second); remaining != 0 {
+		t.Fatalf("got remaining %v, want 0 for a different, unrelated user", remaining)
+	}
+
+	if remaining := s.CooldownRemaining("user-1", 0); remaining != 0 {
+		t.Fatalf("got remaining %v, want 0 when the cooldown itself is disabled (zero)", remaining)
 	}
 }

@@ -33,6 +33,13 @@ type RequestResult struct {
 func runLoadTest(ctx context.Context, job Job, onUpdate func(Metrics)) []RequestResult {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(job.DurationSeconds)*time.Second)
 	defer cancel()
+	// A second cancel layered on top of the duration timeout, so the
+	// circuit breaker below can stop every VU early without waiting out
+	// the full configured duration. Everything downstream already reads
+	// from `ctx`, so this shadow is the only change needed to make VU
+	// loops and the ramp-pattern startup delay both breaker-aware for free.
+	ctx, cancelBreaker := context.WithCancel(ctx)
+	defer cancelBreaker()
 
 	transport := &http.Transport{
 		MaxIdleConnsPerHost: job.VUs + 10,
@@ -60,6 +67,10 @@ func runLoadTest(ctx context.Context, job Job, onUpdate func(Metrics)) []Request
 
 	start := time.Now()
 	tickerDone := make(chan struct{})
+	var (
+		abortedMu sync.Mutex
+		aborted   bool
+	)
 	if onUpdate != nil {
 		go func() {
 			ticker := time.NewTicker(time.Second)
@@ -71,7 +82,17 @@ func runLoadTest(ctx context.Context, job Job, onUpdate func(Metrics)) []Request
 				case <-tickerDone:
 					return
 				case <-ticker.C:
-					onUpdate(computeMetrics(job.ID, snapshot(), time.Since(start), false))
+					m := computeMetrics(job.ID, snapshot(), time.Since(start), false)
+					if tripsCircuitBreaker(m) {
+						abortedMu.Lock()
+						aborted = true
+						abortedMu.Unlock()
+						m.CircuitBroken = true
+						onUpdate(m)
+						cancelBreaker() // stop every VU now instead of waiting out the duration
+						return
+					}
+					onUpdate(m)
 				}
 			}
 		}()
@@ -126,7 +147,11 @@ func runLoadTest(ctx context.Context, job Job, onUpdate func(Metrics)) []Request
 	close(tickerDone)
 	final := snapshot()
 	if onUpdate != nil {
-		onUpdate(computeMetrics(job.ID, final, time.Since(start), true))
+		finalMetrics := computeMetrics(job.ID, final, time.Since(start), true)
+		abortedMu.Lock()
+		finalMetrics.CircuitBroken = aborted
+		abortedMu.Unlock()
+		onUpdate(finalMetrics)
 	}
 	return final
 }
