@@ -4,16 +4,16 @@ import "testing"
 
 func TestTestStoreSnapshotUnknownID(t *testing.T) {
 	s := NewTestStore()
-	if _, ok := s.Snapshot("nope"); ok {
+	if _, ok := s.Snapshot("nope", "user-1"); ok {
 		t.Fatal("expected ok=false for an unregistered test ID")
 	}
 }
 
 func TestTestStoreRegisterStartsNotDone(t *testing.T) {
 	s := NewTestStore()
-	s.Register("test-1", "http://example.com/fast", []string{"job-a", "job-b"})
+	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a", "job-b"})
 
-	snap, ok := s.Snapshot("test-1")
+	snap, ok := s.Snapshot("test-1", "user-1")
 	if !ok {
 		t.Fatal("expected the registered test to be found")
 	}
@@ -25,12 +25,24 @@ func TestTestStoreRegisterStartsNotDone(t *testing.T) {
 	}
 }
 
+func TestTestStoreSnapshotScopedToOwner(t *testing.T) {
+	s := NewTestStore()
+	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a"})
+
+	if _, ok := s.Snapshot("test-1", "user-2"); ok {
+		t.Fatal("expected a different user's test to be invisible, same as an unknown ID")
+	}
+	if _, ok := s.Snapshot("test-1", "user-1"); !ok {
+		t.Fatal("expected the owning user to still see their own test")
+	}
+}
+
 func TestTestStoreUpdateMergesAndDetectsDone(t *testing.T) {
 	s := NewTestStore()
-	s.Register("test-1", "http://example.com/fast", []string{"job-a", "job-b"})
+	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a", "job-b"})
 
 	s.Update("test-1", "job-a", 100, 0, 50.0, "10", "20", "30", false)
-	snap, _ := s.Snapshot("test-1")
+	snap, _ := s.Snapshot("test-1", "user-1")
 	if snap.Done {
 		t.Fatal("expected not done while job-b hasn't reported yet")
 	}
@@ -40,13 +52,13 @@ func TestTestStoreUpdateMergesAndDetectsDone(t *testing.T) {
 
 	s.Update("test-1", "job-b", 200, 5, 75.0, "12", "22", "32", true)
 	// job-a hasn't reported done=true yet.
-	snap, _ = s.Snapshot("test-1")
+	snap, _ = s.Snapshot("test-1", "user-1")
 	if snap.Done {
 		t.Fatal("expected not done while job-a hasn't reported done=true")
 	}
 
 	s.Update("test-1", "job-a", 150, 1, 55.0, "10", "20", "30", true)
-	snap, _ = s.Snapshot("test-1")
+	snap, _ = s.Snapshot("test-1", "user-1")
 	if !snap.Done {
 		t.Fatal("expected done once every sub-job reports done=true")
 	}
@@ -63,13 +75,13 @@ func TestTestStoreUpdateMergesAndDetectsDone(t *testing.T) {
 
 func TestTestStoreUpdateIgnoresUnknownIDs(t *testing.T) {
 	s := NewTestStore()
-	s.Register("test-1", "http://example.com/fast", []string{"job-a"})
+	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a"})
 
 	// Neither call should panic or affect the registered test.
 	s.Update("unknown-test", "job-a", 999, 0, 0, "", "", "", true)
 	s.Update("test-1", "unknown-job", 999, 0, 0, "", "", "", true)
 
-	snap, _ := s.Snapshot("test-1")
+	snap, _ := s.Snapshot("test-1", "user-1")
 	if snap.TotalRequests != 0 {
 		t.Fatalf("got total requests %d, want 0 (stray updates should be ignored)", snap.TotalRequests)
 	}

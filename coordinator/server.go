@@ -2,24 +2,52 @@ package main
 
 import "net/http"
 
-// NewServer wires the coordinator's HTTP API surface: domain verification
-// (M7) and test submission/status (job-submission API, pulled forward from
-// M10 to give M7/M8 something to actually gate). No auth yet — that's M8.
-func NewServer(enqueuer jobEnqueuer, tests *TestStore, domains *DomainStore, allowlist map[string]bool, resolver txtLookuper, httpClient httpGetter) http.Handler {
+// ServerConfig is everything NewServer needs to wire up the coordinator's
+// HTTP API. A struct instead of a long parameter list since M8 pushed this
+// past a dozen dependencies once GitHub OAuth joined domain verification
+// and test submission.
+type ServerConfig struct {
+	Enqueuer   jobEnqueuer
+	Tests      *TestStore
+	Domains    *DomainStore
+	Allowlist  map[string]bool
+	Resolver   txtLookuper
+	HTTPClient httpGetter
+
+	Users             *UserStore
+	GitHubClientID    string // empty disables the /auth/github/* routes
+	GitHubRedirectURL string
+	OAuthExchange     oauthExchanger
+	GitHubUsers       githubUserFetcher
+}
+
+// NewServer wires the coordinator's HTTP API surface: GitHub login (M8),
+// domain verification (M7), and test submission/status (pulled forward
+// from M10 to give M7/M8 something to actually gate). Every route except
+// /healthz and /auth/github/* requires a valid session from login.
+func NewServer(cfg ServerConfig) http.Handler {
 	s := &apiServer{
-		enqueuer:   enqueuer,
-		tests:      tests,
-		domains:    domains,
-		allowlist:  allowlist,
-		resolver:   resolver,
-		httpClient: httpClient,
+		enqueuer:          cfg.Enqueuer,
+		tests:             cfg.Tests,
+		domains:           cfg.Domains,
+		allowlist:         cfg.Allowlist,
+		resolver:          cfg.Resolver,
+		httpClient:        cfg.HTTPClient,
+		users:             cfg.Users,
+		authStates:        newStateStore(),
+		githubClientID:    cfg.GitHubClientID,
+		githubRedirectURL: cfg.GitHubRedirectURL,
+		oauthExchange:     cfg.OAuthExchange,
+		githubUsers:       cfg.GitHubUsers,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	mux.HandleFunc("POST /domains", s.handleCreateDomainChallenge)
-	mux.HandleFunc("POST /domains/{domain}/verify", s.handleVerifyDomain)
-	mux.HandleFunc("POST /tests", s.handleCreateTest)
-	mux.HandleFunc("GET /tests/{id}", s.handleGetTest)
+	mux.HandleFunc("GET /auth/github/login", s.handleGithubLogin)
+	mux.HandleFunc("GET /auth/github/callback", s.handleGithubCallback)
+	mux.HandleFunc("POST /domains", s.requireAuth(s.handleCreateDomainChallenge))
+	mux.HandleFunc("POST /domains/{domain}/verify", s.requireAuth(s.handleVerifyDomain))
+	mux.HandleFunc("POST /tests", s.requireAuth(s.handleCreateTest))
+	mux.HandleFunc("GET /tests/{id}", s.requireAuth(s.handleGetTest))
 	return mux
 }

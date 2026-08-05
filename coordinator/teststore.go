@@ -20,6 +20,7 @@ type subJobState struct {
 // sub-jobs it fanned out to and their latest reported state.
 type TestState struct {
 	TestID    string
+	OwnerID   string
 	URL       string
 	CreatedAt time.Time
 	SubJobs   map[string]*subJobState // keyed by job ID
@@ -40,9 +41,11 @@ func NewTestStore() *TestStore {
 
 // Register records a newly-enqueued test and its sub-job IDs so incoming
 // result snapshots (keyed by test_id/job_id) have somewhere to land.
-func (s *TestStore) Register(testID, url string, jobIDs []string) {
+// ownerID scopes the test to whichever user submitted it (M8).
+func (s *TestStore) Register(testID, ownerID, url string, jobIDs []string) {
 	state := &TestState{
 		TestID:    testID,
+		OwnerID:   ownerID,
 		URL:       url,
 		CreatedAt: time.Now(),
 		SubJobs:   make(map[string]*subJobState, len(jobIDs)),
@@ -106,13 +109,16 @@ type TestSnapshot struct {
 	SubJobs       []SubJobSnapshot `json:"sub_jobs"`
 }
 
-// Snapshot returns the current state of testID, or ok=false if unknown.
-func (s *TestStore) Snapshot(testID string) (TestSnapshot, bool) {
+// Snapshot returns the current state of testID, scoped to ownerID — a test
+// owned by someone else reports ok=false exactly the same as a test that
+// doesn't exist at all, so a caller can't use this to probe for the
+// existence of other users' tests.
+func (s *TestStore) Snapshot(testID, ownerID string) (TestSnapshot, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	t, ok := s.tests[testID]
-	if !ok {
+	if !ok || t.OwnerID != ownerID {
 		return TestSnapshot{}, false
 	}
 

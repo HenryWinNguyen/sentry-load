@@ -38,14 +38,43 @@ func main() {
 
 	tests := NewTestStore()
 	domains := NewDomainStore()
+	users := NewUserStore()
 	enqueuer := &redisEnqueuer{rdb: rdb}
 	allowlist := parseAllowlist(os.Getenv("ALLOWLISTED_HOSTS"))
+
+	githubClientID := os.Getenv("GITHUB_CLIENT_ID")
+	githubClientSecret := os.Getenv("GITHUB_CLIENT_SECRET")
+	githubRedirectURL := os.Getenv("GITHUB_REDIRECT_URL")
+	if githubRedirectURL == "" {
+		githubRedirectURL = "http://localhost:" + port + "/auth/github/callback"
+	}
+	if githubClientID == "" || githubClientSecret == "" {
+		log.Print("GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET not set — /auth/github/* routes disabled, rest of the API still works")
+	}
+	githubClient := &githubOAuthClient{
+		clientID:     githubClientID,
+		clientSecret: githubClientSecret,
+		redirectURL:  githubRedirectURL,
+		httpClient:   http.DefaultClient,
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go watchResults(ctx, rdb, tests)
 
-	handler := NewServer(enqueuer, tests, domains, allowlist, net.DefaultResolver, http.DefaultClient)
+	handler := NewServer(ServerConfig{
+		Enqueuer:          enqueuer,
+		Tests:             tests,
+		Domains:           domains,
+		Allowlist:         allowlist,
+		Resolver:          net.DefaultResolver,
+		HTTPClient:        http.DefaultClient,
+		Users:             users,
+		GitHubClientID:    githubClientID,
+		GitHubRedirectURL: githubRedirectURL,
+		OAuthExchange:     githubClient,
+		GitHubUsers:       githubClient,
+	})
 	srv := &http.Server{Addr: ":" + port, Handler: handler}
 
 	go func() {
