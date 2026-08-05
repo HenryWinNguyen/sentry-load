@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 )
@@ -60,6 +61,62 @@ func (f *fakeGitHubUserFetcher) FetchUser(_ context.Context, _ string) (int64, s
 	return f.githubID, f.githubLogin, nil
 }
 
+// fakeHistoryStore is an in-memory stand-in for postgresHistory, so
+// handler tests can exercise the history-backed paths (GET /tests,
+// GET /tests/{id}'s Postgres fallback) without a real database.
+type fakeHistoryStore struct {
+	mu    sync.Mutex
+	byID  map[string]TestSnapshot // testID -> snapshot
+	owner map[string]string       // testID -> ownerID
+	err   error
+}
+
+func newFakeHistoryStore() *fakeHistoryStore {
+	return &fakeHistoryStore{byID: make(map[string]TestSnapshot), owner: make(map[string]string)}
+}
+
+func (f *fakeHistoryStore) Save(_ context.Context, snap TestSnapshot, ownerID string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.byID[snap.TestID] = snap
+	f.owner[snap.TestID] = ownerID
+	return nil
+}
+
+func (f *fakeHistoryStore) Get(_ context.Context, testID, ownerID string) (TestSnapshot, bool, error) {
+	if f.err != nil {
+		return TestSnapshot{}, false, f.err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	snap, ok := f.byID[testID]
+	if !ok || f.owner[testID] != ownerID {
+		return TestSnapshot{}, false, nil
+	}
+	return snap, true, nil
+}
+
+func (f *fakeHistoryStore) List(_ context.Context, ownerID string, limit int) ([]TestSnapshot, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []TestSnapshot
+	for testID, snap := range f.byID {
+		if f.owner[testID] == ownerID {
+			out = append(out, snap)
+		}
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 // testServer bundles a running httptest server with the stores it was
 // built on, so tests can both drive it over HTTP and inspect state
 // directly.
@@ -68,6 +125,7 @@ type testServer struct {
 	domains *DomainStore
 	tests   *TestStore
 	users   *UserStore
+	history *fakeHistoryStore // nil unless built with newTestServerWithHistory
 }
 
 // newTestServer wires a fresh server with the given enqueuer/resolver/http
@@ -103,6 +161,34 @@ func newTestServerWithCooldown(t *testing.T, enqueuer jobEnqueuer, cooldown time
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	return &testServer{Server: server, domains: domains, tests: tests, users: users}
+}
+
+// newTestServerWithHistory is like newTestServer but with a fake Postgres
+// history store wired in (M10), for tests of GET /tests and the
+// GET /tests/{id} Postgres fallback.
+func newTestServerWithHistory(t *testing.T, enqueuer jobEnqueuer) *testServer {
+	t.Helper()
+	domains := NewDomainStore()
+	tests := NewTestStore()
+	users := NewUserStore()
+	history := newFakeHistoryStore()
+	handler := NewServer(ServerConfig{
+		Enqueuer:          enqueuer,
+		Tests:             tests,
+		Domains:           domains,
+		Allowlist:         map[string]bool{"allowed.example.com": true},
+		Resolver:          fakeResolver{},
+		HTTPClient:        http.DefaultClient,
+		Users:             users,
+		GitHubClientID:    "test-client-id",
+		GitHubRedirectURL: "http://localhost/auth/github/callback",
+		OAuthExchange:     &fakeOAuthExchanger{accessToken: "gh-token"},
+		GitHubUsers:       &fakeGitHubUserFetcher{githubID: 1, githubLogin: "henry"},
+		History:           history,
+	})
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	return &testServer{Server: server, domains: domains, tests: tests, users: users, history: history}
 }
 
 func newTestServerWithOAuth(t *testing.T, enqueuer jobEnqueuer, resolver txtLookuper, httpClient httpGetter, exchanger oauthExchanger, fetcher githubUserFetcher) *testServer {
@@ -267,26 +353,29 @@ func TestHandleGithubCallbackFullFlow(t *testing.T) {
 	state := loc.Query().Get("state")
 
 	callbackURL := server.URL + "/auth/github/callback?code=some-code&state=" + state
-	resp, err := http.Get(callbackURL)
+	resp, err := client.Get(callbackURL)
 	if err != nil {
 		t.Fatalf("callback GET failed: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("got status %d, want 200", resp.StatusCode)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("got status %d, want 302 (redirect to the dashboard)", resp.StatusCode)
 	}
 
-	var got loginResponse
-	json.NewDecoder(resp.Body).Decode(&got)
-	if got.Token == "" {
-		t.Fatal("expected a non-empty session token")
+	dest, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatalf("parsing Location header: %v", err)
 	}
-	if got.GitHubLogin != "henry" {
-		t.Fatalf("got github_login %q, want henry", got.GitHubLogin)
+	token := dest.Query().Get("token")
+	if token == "" {
+		t.Fatal("expected a non-empty token in the redirect")
+	}
+	if got := dest.Query().Get("github_login"); got != "henry" {
+		t.Fatalf("got github_login %q, want henry", got)
 	}
 
 	// The issued token should actually work against a protected route.
-	testResp := authedRequest(t, http.MethodPost, server.URL+"/domains", got.Token, createDomainRequest{Domain: "example.com"})
+	testResp := authedRequest(t, http.MethodPost, server.URL+"/domains", token, createDomainRequest{Domain: "example.com"})
 	if testResp.StatusCode != http.StatusOK {
 		t.Fatalf("using the issued token: got status %d, want 200", testResp.StatusCode)
 	}
@@ -624,5 +713,60 @@ func TestHandleGetTestNotVisibleToOtherUsers(t *testing.T) {
 	ownResp := authedRequest(t, http.MethodGet, server.URL+"/tests/test-1", owner, nil)
 	if ownResp.StatusCode != http.StatusOK {
 		t.Fatalf("owner request: got status %d, want 200", ownResp.StatusCode)
+	}
+}
+
+func TestHandleListTestsWithoutHistoryConfigured(t *testing.T) {
+	server := newTestServer(t, &fakeEnqueuer{}, fakeResolver{}, http.DefaultClient)
+	token := server.login(t)
+
+	resp := authedRequest(t, http.MethodGet, server.URL+"/tests", token, nil)
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("got status %d, want 501 (Postgres not configured)", resp.StatusCode)
+	}
+}
+
+func TestHandleListTestsReturnsOwnersHistory(t *testing.T) {
+	server := newTestServerWithHistory(t, &fakeEnqueuer{})
+	token := server.login(t)
+	user, _ := server.users.FindOrCreate(1, "henry") // same identity server.login used
+
+	server.history.byID["test-a"] = TestSnapshot{TestID: "test-a", URL: "http://allowed.example.com/fast", Done: true}
+	server.history.owner["test-a"] = user.ID
+	server.history.byID["test-b"] = TestSnapshot{TestID: "test-b", URL: "http://allowed.example.com/slow", Done: true}
+	server.history.owner["test-b"] = "someone-else"
+
+	resp := authedRequest(t, http.MethodGet, server.URL+"/tests", token, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want 200", resp.StatusCode)
+	}
+	var got []TestSnapshot
+	json.NewDecoder(resp.Body).Decode(&got)
+	if len(got) != 1 {
+		t.Fatalf("got %d tests, want 1 (only the caller's own)", len(got))
+	}
+	if got[0].TestID != "test-a" {
+		t.Fatalf("got test %q, want test-a", got[0].TestID)
+	}
+}
+
+func TestHandleGetTestFallsBackToHistory(t *testing.T) {
+	server := newTestServerWithHistory(t, &fakeEnqueuer{})
+	token := server.login(t)
+	user, _ := server.users.FindOrCreate(1, "henry")
+
+	// Not registered in the in-memory TestStore at all — only in history,
+	// simulating a test that finished before a coordinator restart.
+	server.history.byID["old-test"] = TestSnapshot{TestID: "old-test", URL: "http://allowed.example.com/fast", Done: true, TotalRequests: 42}
+	server.history.owner["old-test"] = user.ID
+
+	resp := authedRequest(t, http.MethodGet, server.URL+"/tests/old-test", token, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want 200", resp.StatusCode)
+	}
+	var got TestSnapshot
+	json.NewDecoder(resp.Body).Decode(&got)
+	if got.TotalRequests != 42 {
+		t.Fatalf("got total_requests %d, want 42", got.TotalRequests)
 	}
 }

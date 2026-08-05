@@ -35,13 +35,59 @@ type TestState struct {
 type TestStore struct {
 	mu            sync.Mutex
 	tests         map[string]*TestState
-	lastSubmitted map[string]time.Time // ownerID -> last Register call
+	lastSubmitted map[string]time.Time           // ownerID -> last Register call
+	subscribers   map[string][]chan TestSnapshot // testID -> live WebSocket subscribers (M10)
 }
 
 func NewTestStore() *TestStore {
 	return &TestStore{
 		tests:         make(map[string]*TestState),
 		lastSubmitted: make(map[string]time.Time),
+		subscribers:   make(map[string][]chan TestSnapshot),
+	}
+}
+
+// Subscribe registers interest in live updates for testID, returning a
+// channel that receives a new TestSnapshot on every Update call that
+// touches this test, and an unsubscribe function the caller must call
+// exactly once when done (e.g. on WebSocket disconnect) to release it.
+// The channel is closed by unsubscribe, never by the store itself.
+func (s *TestStore) Subscribe(testID string) (<-chan TestSnapshot, func()) {
+	ch := make(chan TestSnapshot, 4)
+
+	s.mu.Lock()
+	s.subscribers[testID] = append(s.subscribers[testID], ch)
+	s.mu.Unlock()
+
+	var once sync.Once
+	unsubscribe := func() {
+		once.Do(func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			subs := s.subscribers[testID]
+			for i, c := range subs {
+				if c == ch {
+					s.subscribers[testID] = append(subs[:i], subs[i+1:]...)
+					break
+				}
+			}
+			close(ch)
+		})
+	}
+	return ch, unsubscribe
+}
+
+// notifySubscribers fans snap out to every live subscriber for its test,
+// dropping the update for any subscriber whose channel is currently full
+// rather than blocking — a stalled WebSocket reader must never be able to
+// stall Update() and, transitively, the shared results-stream watcher.
+// Must be called with s.mu held.
+func (s *TestStore) notifySubscribers(testID string, snap TestSnapshot) {
+	for _, ch := range s.subscribers[testID] {
+		select {
+		case ch <- snap:
+		default:
+		}
 	}
 }
 
@@ -85,27 +131,61 @@ func (s *TestStore) CooldownRemaining(ownerID string, cooldown time.Duration) ti
 	return cooldown - elapsed
 }
 
-// Update applies one results-stream snapshot for a sub-job of a test.
+// Update applies one results-stream snapshot for a sub-job of a test, and
+// reports whether every sub-job of the test is now done — the signal
+// resultwatcher.go uses to know it's time to persist the finished test
+// (M10), without re-triggering on every later message for a test that was
+// already done.
 // Unknown test/job IDs are ignored rather than erroring — the results
 // stream is shared, so a snapshot for a test this store never registered
 // (e.g. a stray CLI run, or a test from before a restart) is expected, not
 // a bug.
-func (s *TestStore) Update(testID, jobID string, requests, errors int, rps float64, p50, p95, p99 string, done, circuitBroken bool) {
+func (s *TestStore) Update(testID, jobID string, requests, errors int, rps float64, p50, p95, p99 string, done, circuitBroken bool) (justFinished bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	t, ok := s.tests[testID]
 	if !ok {
-		return
+		return false
 	}
 	sj, ok := t.SubJobs[jobID]
 	if !ok {
-		return
+		return false
 	}
+	wasDone := allSubJobsDone(t)
 	sj.requests, sj.errors, sj.rps = requests, errors, rps
 	sj.p50, sj.p95, sj.p99 = p50, p95, p99
 	sj.done = done
 	sj.circuitBroken = circuitBroken
+
+	s.notifySubscribers(testID, buildSnapshot(t))
+
+	return !wasDone && allSubJobsDone(t)
+}
+
+func allSubJobsDone(t *TestState) bool {
+	for _, sj := range t.SubJobs {
+		if !sj.done {
+			return false
+		}
+	}
+	return true
+}
+
+// snapshotUnscoped is Snapshot without the owner check — for trusted
+// internal callers (the persistence trigger in resultwatcher.go) that
+// legitimately need any test's data regardless of who owns it. Never
+// expose this to a handler.
+func (s *TestStore) snapshotUnscoped(testID string) (TestSnapshot, string, bool) {
+	s.mu.Lock()
+	ownerID := ""
+	if t, ok := s.tests[testID]; ok {
+		ownerID = t.OwnerID
+	}
+	s.mu.Unlock()
+
+	snap, ok := s.Snapshot(testID, ownerID)
+	return snap, ownerID, ok
 }
 
 // SubJobSnapshot is the JSON-friendly view of one sub-job's latest state.
@@ -150,7 +230,14 @@ func (s *TestStore) Snapshot(testID, ownerID string) (TestSnapshot, bool) {
 	if !ok || t.OwnerID != ownerID {
 		return TestSnapshot{}, false
 	}
+	return buildSnapshot(t), true
+}
 
+// buildSnapshot merges a TestState's sub-jobs into the JSON-friendly
+// TestSnapshot view. Shared by Snapshot and Update (the latter to build
+// the payload it fans out to WebSocket subscribers) — must be called with
+// s.mu already held.
+func buildSnapshot(t *TestState) TestSnapshot {
 	snap := TestSnapshot{TestID: t.TestID, URL: t.URL, Done: true}
 	for jobID, sj := range t.SubJobs {
 		snap.SubJobs = append(snap.SubJobs, SubJobSnapshot{
@@ -175,6 +262,5 @@ func (s *TestStore) Snapshot(testID, ownerID string) (TestSnapshot, bool) {
 		}
 	}
 	sort.Slice(snap.SubJobs, func(i, j int) bool { return snap.SubJobs[i].JobID < snap.SubJobs[j].JobID })
-
-	return snap, true
+	return snap
 }
