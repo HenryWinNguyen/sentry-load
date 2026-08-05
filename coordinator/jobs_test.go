@@ -4,10 +4,10 @@ import "testing"
 
 func TestSplitVUs(t *testing.T) {
 	tests := []struct {
-		name            string
-		totalVUs        int
-		fanout          int
-		want            []int
+		name     string
+		totalVUs int
+		fanout   int
+		want     []int
 	}{
 		{name: "evenly divisible", totalVUs: 20, fanout: 2, want: []int{10, 10}},
 		{name: "remainder goes to the first sub-jobs", totalVUs: 20, fanout: 3, want: []int{7, 7, 6}},

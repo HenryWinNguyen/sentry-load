@@ -24,10 +24,123 @@ type apiServer struct {
 	allowlist  map[string]bool
 	resolver   txtLookuper
 	httpClient httpGetter
+
+	users             *UserStore
+	authStates        *stateStore
+	githubClientID    string
+	githubRedirectURL string
+	oauthExchange     oauthExchanger
+	githubUsers       githubUserFetcher
 }
 
 type errorResponse struct {
 	Error string `json:"error"`
+}
+
+type contextKey int
+
+const userContextKey contextKey = iota
+
+func userFromContext(ctx context.Context) (*User, bool) {
+	u, ok := ctx.Value(userContextKey).(*User)
+	return u, ok
+}
+
+// requireAuth wraps a handler so it only runs for requests carrying a valid
+// `Authorization: Bearer <token>` header from a completed GitHub login
+// (M8), making the authenticated user available via userFromContext.
+func (s *apiServer) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || token == "" {
+			writeError(w, http.StatusUnauthorized, "missing or malformed Authorization header")
+			return
+		}
+		user, ok := s.users.UserForSession(token)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "invalid or expired token")
+			return
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), userContextKey, user)))
+	}
+}
+
+// handleGithubLogin starts the GitHub OAuth flow by redirecting to GitHub's
+// consent screen with a fresh single-use CSRF state token.
+func (s *apiServer) handleGithubLogin(w http.ResponseWriter, r *http.Request) {
+	if s.githubClientID == "" {
+		writeError(w, http.StatusNotImplemented, "GitHub OAuth is not configured on this server")
+		return
+	}
+	state, err := s.authStates.Issue()
+	if err != nil {
+		log.Printf("failed to issue oauth state: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to start login")
+		return
+	}
+	q := url.Values{
+		"client_id":    {s.githubClientID},
+		"redirect_uri": {s.githubRedirectURL},
+		"state":        {state},
+	}
+	http.Redirect(w, r, githubAuthorizeURL+"?"+q.Encode(), http.StatusFound)
+}
+
+type loginResponse struct {
+	Token       string `json:"token"`
+	GitHubLogin string `json:"github_login"`
+}
+
+// handleGithubCallback completes the OAuth flow: validates state, exchanges
+// the code for a GitHub access token, resolves the GitHub identity behind
+// it, finds-or-creates the corresponding user, and issues a coordinator
+// session token for the caller to use as a bearer token on every other
+// endpoint.
+func (s *apiServer) handleGithubCallback(w http.ResponseWriter, r *http.Request) {
+	if s.githubClientID == "" {
+		writeError(w, http.StatusNotImplemented, "GitHub OAuth is not configured on this server")
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	state := r.URL.Query().Get("state")
+	if code == "" || state == "" {
+		writeError(w, http.StatusBadRequest, "missing code or state")
+		return
+	}
+	if !s.authStates.Consume(state) {
+		writeError(w, http.StatusBadRequest, "invalid or expired state")
+		return
+	}
+
+	accessToken, err := s.oauthExchange.Exchange(r.Context(), code)
+	if err != nil {
+		log.Printf("github token exchange failed: %v", err)
+		writeError(w, http.StatusBadGateway, "failed to complete GitHub login")
+		return
+	}
+
+	githubID, githubLogin, err := s.githubUsers.FetchUser(r.Context(), accessToken)
+	if err != nil {
+		log.Printf("github user fetch failed: %v", err)
+		writeError(w, http.StatusBadGateway, "failed to complete GitHub login")
+		return
+	}
+
+	user, err := s.users.FindOrCreate(githubID, githubLogin)
+	if err != nil {
+		log.Printf("failed to create user: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to complete GitHub login")
+		return
+	}
+	token, err := s.users.IssueSession(user.ID)
+	if err != nil {
+		log.Printf("failed to issue session: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to complete GitHub login")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, loginResponse{Token: token, GitHubLogin: user.GitHubLogin})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -161,6 +274,12 @@ type createTestResponse struct {
 // between a load tester and a DDoS-as-a-service tool (SCOPE.md) — it's
 // enforced here, not left to the worker.
 func (s *apiServer) handleCreateTest(w http.ResponseWriter, r *http.Request) {
+	user, ok := userFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
 	var req createTestRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -211,16 +330,23 @@ func (s *apiServer) handleCreateTest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to enqueue test")
 		return
 	}
-	s.tests.Register(testID, req.URL, subJobIDs)
+	s.tests.Register(testID, user.ID, req.URL, subJobIDs)
 
 	writeJSON(w, http.StatusAccepted, createTestResponse{TestID: testID, SubJobIDs: subJobIDs})
 }
 
 // handleGetTest returns the current merged status of a previously
-// submitted test — poll this until done=true.
+// submitted test — poll this until done=true. Scoped to the caller: a test
+// belonging to someone else 404s exactly like an unknown ID would.
 func (s *apiServer) handleGetTest(w http.ResponseWriter, r *http.Request) {
+	user, ok := userFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
 	id := r.PathValue("id")
-	snap, ok := s.tests.Snapshot(id)
+	snap, ok := s.tests.Snapshot(id, user.ID)
 	if !ok {
 		writeError(w, http.StatusNotFound, "unknown test id")
 		return
