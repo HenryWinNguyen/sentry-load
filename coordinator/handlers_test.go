@@ -353,26 +353,29 @@ func TestHandleGithubCallbackFullFlow(t *testing.T) {
 	state := loc.Query().Get("state")
 
 	callbackURL := server.URL + "/auth/github/callback?code=some-code&state=" + state
-	resp, err := http.Get(callbackURL)
+	resp, err := client.Get(callbackURL)
 	if err != nil {
 		t.Fatalf("callback GET failed: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("got status %d, want 200", resp.StatusCode)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("got status %d, want 302 (redirect to the dashboard)", resp.StatusCode)
 	}
 
-	var got loginResponse
-	json.NewDecoder(resp.Body).Decode(&got)
-	if got.Token == "" {
-		t.Fatal("expected a non-empty session token")
+	dest, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatalf("parsing Location header: %v", err)
 	}
-	if got.GitHubLogin != "henry" {
-		t.Fatalf("got github_login %q, want henry", got.GitHubLogin)
+	token := dest.Query().Get("token")
+	if token == "" {
+		t.Fatal("expected a non-empty token in the redirect")
+	}
+	if got := dest.Query().Get("github_login"); got != "henry" {
+		t.Fatalf("got github_login %q, want henry", got)
 	}
 
 	// The issued token should actually work against a protected route.
-	testResp := authedRequest(t, http.MethodPost, server.URL+"/domains", got.Token, createDomainRequest{Domain: "example.com"})
+	testResp := authedRequest(t, http.MethodPost, server.URL+"/domains", token, createDomainRequest{Domain: "example.com"})
 	if testResp.StatusCode != http.StatusOK {
 		t.Fatalf("using the issued token: got status %d, want 200", testResp.StatusCode)
 	}

@@ -33,6 +33,7 @@ type apiServer struct {
 	githubRedirectURL string
 	oauthExchange     oauthExchanger
 	githubUsers       githubUserFetcher
+	dashboardURL      string // where handleGithubCallback sends the browser after login (M10)
 
 	testCooldown time.Duration
 	history      testHistoryStore // nil if Postgres isn't configured (M10)
@@ -91,16 +92,12 @@ func (s *apiServer) handleGithubLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, githubAuthorizeURL+"?"+q.Encode(), http.StatusFound)
 }
 
-type loginResponse struct {
-	Token       string `json:"token"`
-	GitHubLogin string `json:"github_login"`
-}
-
 // handleGithubCallback completes the OAuth flow: validates state, exchanges
 // the code for a GitHub access token, resolves the GitHub identity behind
-// it, finds-or-creates the corresponding user, and issues a coordinator
-// session token for the caller to use as a bearer token on every other
-// endpoint.
+// it, finds-or-creates the corresponding user, issues a coordinator
+// session token, and redirects the browser to the dashboard with it —
+// there's no page to render here server-side, the dashboard is what turns
+// this into something the user actually sees (M10).
 func (s *apiServer) handleGithubCallback(w http.ResponseWriter, r *http.Request) {
 	if s.githubClientID == "" {
 		writeError(w, http.StatusNotImplemented, "GitHub OAuth is not configured on this server")
@@ -145,7 +142,8 @@ func (s *apiServer) handleGithubCallback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, loginResponse{Token: token, GitHubLogin: user.GitHubLogin})
+	dest := s.dashboardURL + "/auth/callback?token=" + url.QueryEscape(token) + "&github_login=" + url.QueryEscape(user.GitHubLogin)
+	http.Redirect(w, r, dest, http.StatusFound)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

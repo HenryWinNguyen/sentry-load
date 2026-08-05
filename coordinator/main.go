@@ -45,6 +45,11 @@ func main() {
 	enqueuer := &redisEnqueuer{rdb: rdb}
 	allowlist := parseAllowlist(os.Getenv("ALLOWLISTED_HOSTS"))
 
+	dashboardURL := os.Getenv("DASHBOARD_URL")
+	if dashboardURL == "" {
+		dashboardURL = "http://localhost:3000"
+	}
+
 	githubClientID := os.Getenv("GITHUB_CLIENT_ID")
 	githubClientSecret := os.Getenv("GITHUB_CLIENT_SECRET")
 	githubRedirectURL := os.Getenv("GITHUB_REDIRECT_URL")
@@ -99,6 +104,7 @@ func main() {
 		GitHubRedirectURL: githubRedirectURL,
 		OAuthExchange:     githubClient,
 		GitHubUsers:       githubClient,
+		DashboardURL:      dashboardURL,
 		TestCooldown:      testCooldown,
 		History:           history,
 	})

@@ -22,6 +22,7 @@ type ServerConfig struct {
 	GitHubRedirectURL string
 	OAuthExchange     oauthExchanger
 	GitHubUsers       githubUserFetcher
+	DashboardURL      string // where handleGithubCallback redirects after login, and the allowed CORS origin (M10)
 
 	TestCooldown time.Duration    // minimum spacing between one user's test submissions (M9); zero disables it
 	History      testHistoryStore // nil disables /tests history persistence/listing (M10) — Postgres not configured
@@ -45,6 +46,7 @@ func NewServer(cfg ServerConfig) http.Handler {
 		githubRedirectURL: cfg.GitHubRedirectURL,
 		oauthExchange:     cfg.OAuthExchange,
 		githubUsers:       cfg.GitHubUsers,
+		dashboardURL:      cfg.DashboardURL,
 		testCooldown:      cfg.TestCooldown,
 		history:           cfg.History,
 	}
@@ -62,5 +64,27 @@ func NewServer(cfg ServerConfig) http.Handler {
 	// WebSocket handshake, so this route does its own query-param-based
 	// auth instead (see live.go).
 	mux.HandleFunc("GET /tests/{id}/live", s.handleTestLive)
-	return mux
+
+	return withCORS(cfg.DashboardURL, mux)
+}
+
+// withCORS lets the dashboard (a different origin — localhost:3000 vs the
+// coordinator's :8080, and a different domain entirely once deployed) call
+// this API from the browser. Auth is a bearer token, not a cookie, so
+// there's no credentialed-request/CSRF concern in allowing it; the
+// WebSocket route isn't affected by this at all (CORS doesn't apply to the
+// WS handshake, see live.go's CheckOrigin instead).
+func withCORS(allowedOrigin string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if allowedOrigin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
