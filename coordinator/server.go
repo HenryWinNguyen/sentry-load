@@ -60,6 +60,10 @@ func NewServer(cfg ServerConfig) http.Handler {
 	mux.HandleFunc("POST /tests", s.requireAuth(s.handleCreateTest))
 	mux.HandleFunc("GET /tests", s.requireAuth(s.handleListTests))
 	mux.HandleFunc("GET /tests/{id}", s.requireAuth(s.handleGetTest))
+	mux.HandleFunc("POST /tests/{id}/share", s.requireAuth(s.handleShareTest))
+	// Deliberately not wrapped in requireAuth — a share link's whole point
+	// is that anyone holding it can view the report without logging in.
+	mux.HandleFunc("GET /reports/{token}", s.handlePublicReport)
 	// Not wrapped in requireAuth: browsers can't set custom headers on a
 	// WebSocket handshake, so this route does its own query-param-based
 	// auth instead (see live.go).

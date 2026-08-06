@@ -17,6 +17,17 @@ type testHistoryStore interface {
 	Save(ctx context.Context, snap TestSnapshot, ownerID string) error
 	Get(ctx context.Context, testID, ownerID string) (TestSnapshot, bool, error)
 	List(ctx context.Context, ownerID string, limit int) ([]TestSnapshot, error)
+
+	// EnsureShareToken returns testID's public share token, scoped to
+	// ownerID the same way Get is — generating one on first call and
+	// returning the same token on every later call, so "share" always
+	// produces one stable link per test rather than a new one each click
+	// (M11).
+	EnsureShareToken(ctx context.Context, testID, ownerID string) (string, bool, error)
+	// GetByShareToken is the public counterpart to Get — deliberately no
+	// owner check, since the whole point of a share token is that anyone
+	// holding the link can view the result.
+	GetByShareToken(ctx context.Context, shareToken string) (TestSnapshot, bool, error)
 }
 
 // postgresHistory is the production testHistoryStore, backed by Postgres.
@@ -50,7 +61,10 @@ func (h *postgresHistory) Close() {
 
 // migrate applies the schema idempotently. Two tables, no ORM, no separate
 // migration tool — proportionate to the schema's actual size (see
-// CLAUDE.md's "don't over-engineer" guidance).
+// CLAUDE.md's "don't over-engineer" guidance). share_token is added via a
+// separate ALTER TABLE (not just in the CREATE TABLE body) since a
+// coordinator that already ran M10 against this database has the table
+// without it — CREATE TABLE IF NOT EXISTS is a no-op there.
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	_, err := pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS tests (
@@ -63,7 +77,9 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			circuit_broken BOOLEAN NOT NULL,
 			finished_at    TIMESTAMPTZ NOT NULL
 		);
+		ALTER TABLE tests ADD COLUMN IF NOT EXISTS share_token TEXT;
 		CREATE INDEX IF NOT EXISTS idx_tests_owner ON tests (owner_id, finished_at DESC);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_tests_share_token ON tests (share_token) WHERE share_token IS NOT NULL;
 
 		CREATE TABLE IF NOT EXISTS sub_jobs (
 			job_id         TEXT PRIMARY KEY,
@@ -140,25 +156,82 @@ func (h *postgresHistory) Get(ctx context.Context, testID, ownerID string) (Test
 	}
 	snap.Done = true
 
+	subJobs, err := h.loadSubJobs(ctx, testID)
+	if err != nil {
+		return TestSnapshot{}, false, err
+	}
+	snap.SubJobs = subJobs
+	return snap, true, nil
+}
+
+// EnsureShareToken returns testID's public share token, scoped to ownerID
+// (only the owner can turn sharing on for their own test) — generating one
+// on first call and returning the same token on every later call, so
+// clicking "share" twice doesn't invalidate the first link (M11).
+func (h *postgresHistory) EnsureShareToken(ctx context.Context, testID, ownerID string) (string, bool, error) {
+	var existing *string
+	err := h.pool.QueryRow(ctx, `
+		SELECT share_token FROM tests WHERE test_id = $1 AND owner_id = $2
+	`, testID, ownerID).Scan(&existing)
+	if err != nil {
+		return "", false, nil //nolint:nilerr // not found / not owned reads the same as an unknown test, not an error
+	}
+	if existing != nil {
+		return *existing, true, nil
+	}
+
+	token, err := randomToken()
+	if err != nil {
+		return "", false, fmt.Errorf("generating share token: %w", err)
+	}
+	if _, err := h.pool.Exec(ctx, `UPDATE tests SET share_token = $1 WHERE test_id = $2`, token, testID); err != nil {
+		return "", false, fmt.Errorf("saving share token for %s: %w", testID, err)
+	}
+	return token, true, nil
+}
+
+// GetByShareToken is the public counterpart to Get — deliberately no owner
+// check, since holding the link is the entire authorization model for a
+// shared report.
+func (h *postgresHistory) GetByShareToken(ctx context.Context, shareToken string) (TestSnapshot, bool, error) {
+	var snap TestSnapshot
+	err := h.pool.QueryRow(ctx, `
+		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken
+		FROM tests WHERE share_token = $1
+	`, shareToken).Scan(&snap.TestID, &snap.URL, &snap.TotalRequests, &snap.TotalErrors, &snap.CombinedRPS, &snap.CircuitBroken)
+	if err != nil {
+		return TestSnapshot{}, false, nil //nolint:nilerr
+	}
+	snap.Done = true
+
+	subJobs, err := h.loadSubJobs(ctx, snap.TestID)
+	if err != nil {
+		return TestSnapshot{}, false, err
+	}
+	snap.SubJobs = subJobs
+	return snap, true, nil
+}
+
+func (h *postgresHistory) loadSubJobs(ctx context.Context, testID string) ([]SubJobSnapshot, error) {
 	rows, err := h.pool.Query(ctx, `
 		SELECT job_id, requests, errors, rps, p50_ms, p95_ms, p99_ms, circuit_broken
 		FROM sub_jobs WHERE test_id = $1 ORDER BY job_id
 	`, testID)
 	if err != nil {
-		return TestSnapshot{}, false, fmt.Errorf("querying sub-jobs for %s: %w", testID, err)
+		return nil, fmt.Errorf("querying sub-jobs for %s: %w", testID, err)
 	}
 	defer rows.Close()
 
+	var subJobs []SubJobSnapshot
 	for rows.Next() {
 		var sj SubJobSnapshot
 		if err := rows.Scan(&sj.JobID, &sj.Requests, &sj.Errors, &sj.RPS, &sj.P50MS, &sj.P95MS, &sj.P99MS, &sj.CircuitBroken); err != nil {
-			return TestSnapshot{}, false, fmt.Errorf("scanning sub-job row: %w", err)
+			return nil, fmt.Errorf("scanning sub-job row: %w", err)
 		}
 		sj.Done = true
-		snap.SubJobs = append(snap.SubJobs, sj)
+		subJobs = append(subJobs, sj)
 	}
-
-	return snap, true, rows.Err()
+	return subJobs, rows.Err()
 }
 
 // List returns ownerID's most recent tests, newest first, capped at limit.

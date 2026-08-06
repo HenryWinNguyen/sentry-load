@@ -410,3 +410,66 @@ func (s *apiServer) handleListTests(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, snaps)
 }
+
+type shareTestResponse struct {
+	ShareToken string `json:"share_token"`
+	ShareURL   string `json:"share_url"`
+}
+
+// handleShareTest turns on public sharing for a finished test, owned by
+// the caller, and returns a stable link — calling this again for the same
+// test returns the same link rather than minting a new one (M11). Only
+// works for a test that's already in Postgres, which in practice means
+// finished — TestStore's live in-memory state was never meant to be
+// publicly link-shareable mid-run.
+func (s *apiServer) handleShareTest(w http.ResponseWriter, r *http.Request) {
+	user, ok := userFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if s.history == nil {
+		writeError(w, http.StatusNotImplemented, "sharing is not available (Postgres not configured on this server)")
+		return
+	}
+
+	id := r.PathValue("id")
+	token, ok, err := s.history.EnsureShareToken(r.Context(), id, user.ID)
+	if err != nil {
+		log.Printf("failed to create share token for %s: %v", id, err)
+		writeError(w, http.StatusInternalServerError, "failed to create share link")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "unknown test id (only finished tests can be shared)")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, shareTestResponse{
+		ShareToken: token,
+		ShareURL:   s.dashboardURL + "/reports/" + token,
+	})
+}
+
+// handlePublicReport serves a shared test's results with no auth — holding
+// the link is the entire authorization model, by design (M11).
+func (s *apiServer) handlePublicReport(w http.ResponseWriter, r *http.Request) {
+	if s.history == nil {
+		writeError(w, http.StatusNotImplemented, "sharing is not available (Postgres not configured on this server)")
+		return
+	}
+
+	token := r.PathValue("token")
+	snap, ok, err := s.history.GetByShareToken(r.Context(), token)
+	if err != nil {
+		log.Printf("failed to load shared report %s: %v", token, err)
+		writeError(w, http.StatusInternalServerError, "failed to load report")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "unknown or unshared report")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, snap)
+}

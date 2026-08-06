@@ -112,3 +112,16 @@
     @apply font-sans;
   }
 }
+
+/* A new bar/point grows in from the baseline instead of just appearing —
+   used by BarChart/LineChart for each tick's newest data. Only ever
+   applied to a freshly-mounted element (existing bars keep their DOM node
+   and never replay it), so this can't retrigger on unrelated re-renders. */
+@keyframes grow-in {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}

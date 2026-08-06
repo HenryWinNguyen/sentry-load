@@ -1,9 +1,17 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { TestSnapshot, getTest, getToken, testLiveWsUrl } from "@/lib/api";
+import {
+  ApiError,
+  TestSnapshot,
+  getTest,
+  getToken,
+  shareTest,
+  testLiveWsUrl,
+} from "@/lib/api";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -23,6 +31,7 @@ import {
 } from "@/components/ui/table";
 import LineChart from "@/components/LineChart";
 import BarChart from "@/components/BarChart";
+import AnimatedNumber from "@/components/AnimatedNumber";
 
 // Cumulative totals climb every tick regardless of what's actually
 // happening right now, which buries spikes — a jump from 0 to 20 errors
@@ -47,6 +56,10 @@ export default function TestPage({
   const [requestsHistory, setRequestsHistory] = useState<number[]>([]);
   const [errorsHistory, setErrorsHistory] = useState<number[]>([]);
   const [rpsHistory, setRpsHistory] = useState<number[]>([]);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [sharing, setSharing] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (!getToken()) {
@@ -84,6 +97,26 @@ export default function TestPage({
       socket.close();
     };
   }, [id, router]);
+
+  async function handleShare() {
+    setShareError(null);
+    setSharing(true);
+    try {
+      const { share_url } = await shareTest(id);
+      setShareUrl(share_url);
+    } catch (err) {
+      setShareError(err instanceof ApiError ? err.message : "Something went wrong.");
+    } finally {
+      setSharing(false);
+    }
+  }
+
+  async function copyShareUrl() {
+    if (!shareUrl) return;
+    await navigator.clipboard.writeText(shareUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
 
   if (!snap) {
     return (
@@ -146,14 +179,19 @@ export default function TestPage({
       )}
 
       <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <Stat label="Total requests" value={snap.total_requests} />
-        <Stat label="Total errors" value={snap.total_errors} />
+        <Stat label="Total requests" value={snap.total_requests} showDelta />
+        <Stat label="Total errors" value={snap.total_errors} showDelta />
         <Stat
           label="Error rate"
-          value={`${errorRate.toFixed(1)}%`}
+          value={errorRate}
+          format={(v) => `${v.toFixed(1)}%`}
           tone={errorRate > 5 ? "bad" : "good"}
         />
-        <Stat label="Combined RPS" value={snap.combined_rps.toFixed(1)} />
+        <Stat
+          label="Combined RPS"
+          value={snap.combined_rps}
+          format={(v) => v.toFixed(1)}
+        />
       </div>
 
       <div className="mb-8 grid grid-cols-1 gap-6 sm:grid-cols-2">
@@ -256,13 +294,33 @@ export default function TestPage({
       </Card>
 
       {snap.done && (
-        <div className="mt-6 flex items-center justify-between rounded-xl border bg-muted/50 p-4">
-          <p className="text-sm text-muted-foreground">
-            This test has finished running.
-          </p>
-          <Button nativeButton={false} render={<Link href="/tests" />}>
-            Run another test
-          </Button>
+        <div className="mt-6 space-y-3 rounded-xl border bg-muted/50 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              This test has finished running.
+            </p>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={handleShare} disabled={sharing}>
+                {shareUrl ? "Refresh link" : sharing ? "Creating link…" : "Share"}
+              </Button>
+              <Button nativeButton={false} render={<Link href="/tests" />}>
+                Run another test
+              </Button>
+            </div>
+          </div>
+
+          {shareError && (
+            <p className="text-sm text-destructive">{shareError}</p>
+          )}
+
+          {shareUrl && (
+            <div className="flex gap-2">
+              <Input readOnly value={shareUrl} className="font-mono text-xs" />
+              <Button variant="outline" onClick={copyShareUrl}>
+                {copied ? "Copied" : "Copy"}
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </main>
@@ -272,27 +330,58 @@ export default function TestPage({
 function Stat({
   label,
   value,
+  format = (v: number) => Math.round(v).toLocaleString(),
   tone,
+  showDelta,
 }: {
   label: string;
-  value: number | string;
+  value: number;
+  format?: (v: number) => string;
   tone?: "good" | "bad";
+  showDelta?: boolean;
 }) {
+  const prevRef = useRef(value);
+  const [delta, setDelta] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!showDelta) {
+      prevRef.current = value;
+      return;
+    }
+    const diff = value - prevRef.current;
+    prevRef.current = value;
+    if (diff <= 0) return;
+
+    setDelta(diff);
+    const timer = setTimeout(() => setDelta(null), 1500);
+    return () => clearTimeout(timer);
+  }, [value, showDelta]);
+
   return (
     <Card>
       <CardContent>
         <p className="text-xs text-muted-foreground">{label}</p>
-        <p
-          className={`text-2xl font-semibold tracking-tight ${
-            tone === "bad"
-              ? "text-destructive"
-              : tone === "good"
-                ? "text-emerald-600 dark:text-emerald-400"
-                : ""
-          }`}
-        >
-          {value}
-        </p>
+        <div className="flex items-baseline gap-2">
+          <p
+            className={`text-2xl font-semibold tracking-tight ${
+              tone === "bad"
+                ? "text-destructive"
+                : tone === "good"
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : ""
+            }`}
+          >
+            <AnimatedNumber value={value} format={format} />
+          </p>
+          {delta !== null && (
+            <span
+              key={value}
+              className="animate-in fade-in slide-in-from-bottom-1 text-xs font-medium text-primary duration-300"
+            >
+              +{delta.toLocaleString()}
+            </span>
+          )}
+        </div>
       </CardContent>
     </Card>
   );
