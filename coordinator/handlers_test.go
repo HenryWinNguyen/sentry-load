@@ -65,14 +65,19 @@ func (f *fakeGitHubUserFetcher) FetchUser(_ context.Context, _ string) (int64, s
 // handler tests can exercise the history-backed paths (GET /tests,
 // GET /tests/{id}'s Postgres fallback) without a real database.
 type fakeHistoryStore struct {
-	mu    sync.Mutex
-	byID  map[string]TestSnapshot // testID -> snapshot
-	owner map[string]string       // testID -> ownerID
-	err   error
+	mu          sync.Mutex
+	byID        map[string]TestSnapshot // testID -> snapshot
+	owner       map[string]string       // testID -> ownerID
+	shareTokens map[string]string       // testID -> share token
+	err         error
 }
 
 func newFakeHistoryStore() *fakeHistoryStore {
-	return &fakeHistoryStore{byID: make(map[string]TestSnapshot), owner: make(map[string]string)}
+	return &fakeHistoryStore{
+		byID:        make(map[string]TestSnapshot),
+		owner:       make(map[string]string),
+		shareTokens: make(map[string]string),
+	}
 }
 
 func (f *fakeHistoryStore) Save(_ context.Context, snap TestSnapshot, ownerID string) error {
@@ -115,6 +120,37 @@ func (f *fakeHistoryStore) List(_ context.Context, ownerID string, limit int) ([
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+func (f *fakeHistoryStore) EnsureShareToken(_ context.Context, testID, ownerID string) (string, bool, error) {
+	if f.err != nil {
+		return "", false, f.err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.owner[testID] != ownerID {
+		return "", false, nil
+	}
+	if token, ok := f.shareTokens[testID]; ok {
+		return token, true, nil
+	}
+	token := "share-" + testID
+	f.shareTokens[testID] = token
+	return token, true, nil
+}
+
+func (f *fakeHistoryStore) GetByShareToken(_ context.Context, shareToken string) (TestSnapshot, bool, error) {
+	if f.err != nil {
+		return TestSnapshot{}, false, f.err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for testID, token := range f.shareTokens {
+		if token == shareToken {
+			return f.byID[testID], true, nil
+		}
+	}
+	return TestSnapshot{}, false, nil
 }
 
 // testServer bundles a running httptest server with the stores it was
@@ -768,5 +804,126 @@ func TestHandleGetTestFallsBackToHistory(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&got)
 	if got.TotalRequests != 42 {
 		t.Fatalf("got total_requests %d, want 42", got.TotalRequests)
+	}
+}
+
+func TestHandleShareTestWithoutHistoryConfigured(t *testing.T) {
+	server := newTestServer(t, &fakeEnqueuer{}, fakeResolver{}, http.DefaultClient)
+	token := server.login(t)
+
+	resp := authedRequest(t, http.MethodPost, server.URL+"/tests/some-id/share", token, nil)
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("got status %d, want 501 (Postgres not configured)", resp.StatusCode)
+	}
+}
+
+func TestHandleShareTestUnknownOrNotOwned(t *testing.T) {
+	server := newTestServerWithHistory(t, &fakeEnqueuer{})
+	token := server.login(t)
+
+	resp := authedRequest(t, http.MethodPost, server.URL+"/tests/unknown/share", token, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("got status %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestHandleShareTestReturnsStableLink(t *testing.T) {
+	server := newTestServerWithHistory(t, &fakeEnqueuer{})
+	token := server.login(t)
+	user, _ := server.users.FindOrCreate(1, "henry")
+
+	server.history.byID["test-1"] = TestSnapshot{TestID: "test-1", URL: "http://allowed.example.com/fast", Done: true}
+	server.history.owner["test-1"] = user.ID
+
+	first := authedRequest(t, http.MethodPost, server.URL+"/tests/test-1/share", token, nil)
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want 200", first.StatusCode)
+	}
+	var firstBody shareTestResponse
+	json.NewDecoder(first.Body).Decode(&firstBody)
+	if firstBody.ShareToken == "" {
+		t.Fatal("expected a non-empty share token")
+	}
+
+	second := authedRequest(t, http.MethodPost, server.URL+"/tests/test-1/share", token, nil)
+	var secondBody shareTestResponse
+	json.NewDecoder(second.Body).Decode(&secondBody)
+	if secondBody.ShareToken != firstBody.ShareToken {
+		t.Fatalf("got a different token on the second call (%q vs %q), want the same stable link", secondBody.ShareToken, firstBody.ShareToken)
+	}
+}
+
+func TestHandleShareTestAnotherUsersTest(t *testing.T) {
+	server := newTestServerWithHistory(t, &fakeEnqueuer{})
+	owner, _ := server.users.FindOrCreate(1, "owner")
+	server.history.byID["test-1"] = TestSnapshot{TestID: "test-1", URL: "http://allowed.example.com/fast", Done: true}
+	server.history.owner["test-1"] = owner.ID
+
+	other, err := server.users.FindOrCreate(2, "someone-else")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	otherToken, err := server.users.IssueSession(other.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	resp := authedRequest(t, http.MethodPost, server.URL+"/tests/test-1/share", otherToken, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("got status %d, want 404 (can't share someone else's test)", resp.StatusCode)
+	}
+}
+
+func TestHandlePublicReportWithoutHistoryConfigured(t *testing.T) {
+	server := newTestServer(t, &fakeEnqueuer{}, fakeResolver{}, http.DefaultClient)
+
+	resp, err := http.Get(server.URL + "/reports/some-token")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("got status %d, want 501 (Postgres not configured)", resp.StatusCode)
+	}
+}
+
+func TestHandlePublicReportUnknownToken(t *testing.T) {
+	server := newTestServerWithHistory(t, &fakeEnqueuer{})
+
+	resp, err := http.Get(server.URL + "/reports/does-not-exist")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("got status %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestHandlePublicReportServesSharedTestWithNoAuth(t *testing.T) {
+	server := newTestServerWithHistory(t, &fakeEnqueuer{})
+	token := server.login(t)
+	user, _ := server.users.FindOrCreate(1, "henry")
+
+	server.history.byID["test-1"] = TestSnapshot{TestID: "test-1", URL: "http://allowed.example.com/fast", Done: true, TotalRequests: 99}
+	server.history.owner["test-1"] = user.ID
+
+	shareResp := authedRequest(t, http.MethodPost, server.URL+"/tests/test-1/share", token, nil)
+	var shareBody shareTestResponse
+	json.NewDecoder(shareResp.Body).Decode(&shareBody)
+
+	// No Authorization header at all — this is the point of a public link.
+	resp, err := http.Get(server.URL + "/reports/" + shareBody.ShareToken)
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want 200", resp.StatusCode)
+	}
+	var got TestSnapshot
+	json.NewDecoder(resp.Body).Decode(&got)
+	if got.TotalRequests != 99 {
+		t.Fatalf("got total_requests %d, want 99", got.TotalRequests)
 	}
 }
