@@ -37,6 +37,7 @@ type apiServer struct {
 
 	testCooldown time.Duration
 	history      testHistoryStore // nil if Postgres isn't configured (M10)
+	workers      workerCounter    // M12
 }
 
 type errorResponse struct {
@@ -269,6 +270,7 @@ type createTestRequest struct {
 type createTestResponse struct {
 	TestID    string   `json:"test_id"`
 	SubJobIDs []string `json:"sub_job_ids"`
+	Warning   string   `json:"warning,omitempty"` // set if worker_count got clamped to available capacity (M12)
 }
 
 // handleCreateTest validates and enqueues a new test, gated on the target
@@ -333,6 +335,25 @@ func (s *apiServer) handleCreateTest(w http.ResponseWriter, r *http.Request) {
 		fanout = req.VUs // never split into a zero-VU sub-job
 	}
 
+	// Capacity-aware admission control (M12): a sub-job with no worker to
+	// pick it up doesn't fail, it just sits at done=false forever — better
+	// to catch that here than let a test hang with zero explanation.
+	liveWorkers, err := s.workers.CountLiveWorkers(r.Context())
+	if err != nil {
+		log.Printf("failed to check worker capacity: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to check worker capacity")
+		return
+	}
+	if liveWorkers == 0 {
+		writeError(w, http.StatusServiceUnavailable, "no workers are currently available; try again shortly")
+		return
+	}
+	var warning string
+	if fanout > liveWorkers {
+		warning = fmt.Sprintf("requested %d workers but only %d are currently available; running across %d instead", fanout, liveWorkers, liveWorkers)
+		fanout = liveWorkers
+	}
+
 	testID, subJobIDs, err := s.enqueuer.Enqueue(r.Context(), req.URL, req.RampPattern, req.VUs, req.DurationSeconds, fanout)
 	if err != nil {
 		log.Printf("failed to enqueue test: %v", err)
@@ -341,7 +362,7 @@ func (s *apiServer) handleCreateTest(w http.ResponseWriter, r *http.Request) {
 	}
 	s.tests.Register(testID, user.ID, req.URL, subJobIDs)
 
-	writeJSON(w, http.StatusAccepted, createTestResponse{TestID: testID, SubJobIDs: subJobIDs})
+	writeJSON(w, http.StatusAccepted, createTestResponse{TestID: testID, SubJobIDs: subJobIDs, Warning: warning})
 }
 
 // handleGetTest returns the current merged status of a previously

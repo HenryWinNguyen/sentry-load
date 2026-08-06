@@ -43,6 +43,7 @@ func main() {
 	domains := NewDomainStore()
 	users := NewUserStore()
 	enqueuer := &redisEnqueuer{rdb: rdb}
+	workers := &redisWorkerCounter{rdb: rdb}
 	allowlist := parseAllowlist(os.Getenv("ALLOWLISTED_HOSTS"))
 
 	dashboardURL := os.Getenv("DASHBOARD_URL")
@@ -107,6 +108,7 @@ func main() {
 		DashboardURL:      dashboardURL,
 		TestCooldown:      testCooldown,
 		History:           history,
+		Workers:           workers,
 	})
 	srv := &http.Server{Addr: ":" + port, Handler: handler}
 
