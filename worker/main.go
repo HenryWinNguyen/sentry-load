@@ -20,6 +20,17 @@ const (
 	jobsStream    = "sentry:jobs"
 	resultsStream = "sentry:results"
 	consumerGroup = "workers"
+
+	// workerRegistryPrefix + consumer name is a self-expiring Redis key a
+	// worker refreshes on heartbeatInterval — the coordinator counts these
+	// (see coordinator/capacity.go) to know how many workers are actually
+	// alive before accepting a test that needs more than that (M12). A
+	// worker that crashes or loses connectivity just stops refreshing its
+	// key and ages out within heartbeatTTL, no explicit deregistration
+	// needed.
+	workerRegistryPrefix = "sentry:worker:"
+	heartbeatInterval    = 5 * time.Second
+	heartbeatTTL         = 15 * time.Second
 )
 
 func main() {
@@ -50,6 +61,8 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	go heartbeat(ctx, rdb, consumerName)
 
 	log.Printf("%s listening on stream %q (group %q)", consumerName, jobsStream, consumerGroup)
 
@@ -83,6 +96,30 @@ func main() {
 					log.Printf("failed to ack job %s: %v", msg.ID, err)
 				}
 			}
+		}
+	}
+}
+
+// heartbeat refreshes this worker's presence key until ctx is cancelled.
+// Runs once immediately so the coordinator sees this worker as available
+// right away, not after the first tick.
+func heartbeat(ctx context.Context, rdb *redis.Client, consumerName string) {
+	key := workerRegistryPrefix + consumerName
+	send := func() {
+		if err := rdb.Set(ctx, key, time.Now().UTC().Format(time.RFC3339), heartbeatTTL).Err(); err != nil {
+			log.Printf("failed to send heartbeat: %v", err)
+		}
+	}
+
+	send()
+	ticker := time.NewTicker(heartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			send()
 		}
 	}
 }
