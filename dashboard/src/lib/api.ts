@@ -114,7 +114,7 @@ export interface CreateTestInput {
 
 export function createTest(
   input: CreateTestInput,
-): Promise<{ test_id: string; sub_job_ids: string[] }> {
+): Promise<{ test_id: string; sub_job_ids: string[]; warning?: string }> {
   return request("/tests", { method: "POST", body: JSON.stringify(input) });
 }
 

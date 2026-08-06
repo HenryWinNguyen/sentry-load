@@ -37,11 +37,15 @@ export default function TestsPage() {
   const [busy, setBusy] = useState(false);
 
   const [url, setUrl] = useState("http://localhost:8081/fast");
-  const [vus, setVus] = useState(10);
-  const [durationSeconds, setDurationSeconds] = useState(10);
+  // Kept as strings, not numbers — a controlled number input bound to a
+  // number forces the field back to "0" the instant it's cleared (empty
+  // string coerces to 0), which means you can never actually delete the
+  // value to type a new one. Parsed to a number only at submit time.
+  const [vus, setVus] = useState("10");
+  const [durationSeconds, setDurationSeconds] = useState("10");
   const [rampPattern, setRampPattern] =
     useState<(typeof RAMP_PATTERNS)[number]["value"]>("steady");
-  const [workerCount, setWorkerCount] = useState(1);
+  const [workerCount, setWorkerCount] = useState("1");
 
   useEffect(() => {
     if (!getToken()) {
@@ -67,13 +71,17 @@ export default function TestsPage() {
     try {
       const input: CreateTestInput = {
         url,
-        vus,
-        duration_seconds: durationSeconds,
+        vus: Number(vus),
+        duration_seconds: Number(durationSeconds),
         ramp_pattern: rampPattern,
-        worker_count: workerCount,
+        worker_count: Number(workerCount),
       };
-      const { test_id } = await createTest(input);
-      router.push(`/tests/${test_id}`);
+      const { test_id, warning } = await createTest(input);
+      router.push(
+        warning
+          ? `/tests/${test_id}?warning=${encodeURIComponent(warning)}`
+          : `/tests/${test_id}`,
+      );
     } catch (err) {
       if (err instanceof ApiError) {
         setError(
@@ -124,7 +132,7 @@ export default function TestsPage() {
                   min={1}
                   max={200}
                   value={vus}
-                  onChange={(e) => setVus(Number(e.target.value))}
+                  onChange={(e) => setVus(e.target.value)}
                 />
                 <p className="text-xs text-muted-foreground">
                   How many simulated visitors hit your app at once.
@@ -139,7 +147,7 @@ export default function TestsPage() {
                     min={1}
                     max={300}
                     value={durationSeconds}
-                    onChange={(e) => setDurationSeconds(Number(e.target.value))}
+                    onChange={(e) => setDurationSeconds(e.target.value)}
                   />
                   <span className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-xs text-muted-foreground">
                     sec
@@ -188,7 +196,7 @@ export default function TestsPage() {
                   min={1}
                   max={5}
                   value={workerCount}
-                  onChange={(e) => setWorkerCount(Number(e.target.value))}
+                  onChange={(e) => setWorkerCount(e.target.value)}
                 />
                 <p className="text-xs text-muted-foreground">
                   Splits the load across multiple worker machines running in
