@@ -47,6 +47,20 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   });
 
   if (!res.ok) {
+    // A 401 here means the coordinator doesn't recognize this token
+    // anymore — sessions are in-memory (see CLAUDE.md), so any coordinator
+    // restart invalidates every session at once. Rather than let stale
+    // pages sit there erroring on every action, drop the dead token and
+    // send the user back to log in again.
+    if (res.status === 401) {
+      clearToken();
+      // This is plain module code outside the component tree, so
+      // useRouter() isn't available here — and a full reload is the right
+      // call anyway, to guarantee no stale authenticated state lingers
+      // client-side after the session's been invalidated.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+      if (typeof window !== "undefined") window.location.assign("/");
+    }
     const body = await res.json().catch(() => ({}) as { error?: string });
     const retryAfter = res.headers.get("Retry-After");
     throw new ApiError(
@@ -138,4 +152,23 @@ export function testLiveWsUrl(id: string): string {
   const token = getToken() ?? "";
   const wsBase = COORDINATOR_URL.replace(/^http/, "ws");
   return `${wsBase}/tests/${id}/live?token=${encodeURIComponent(token)}`;
+}
+
+export function shareTest(
+  id: string,
+): Promise<{ share_token: string; share_url: string }> {
+  return request(`/tests/${id}/share`, { method: "POST" });
+}
+
+// getPublicReport hits GET /reports/{token} directly rather than through
+// request() — that helper attaches a bearer token when one exists in
+// localStorage, but a shared report is meant to be viewable by someone
+// with no account at all, so this deliberately never sends one.
+export async function getPublicReport(token: string): Promise<TestSnapshot> {
+  const res = await fetch(`${COORDINATOR_URL}/reports/${token}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}) as { error?: string });
+    throw new ApiError(res.status, body.error || `request failed: ${res.status}`);
+  }
+  return res.json();
 }

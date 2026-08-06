@@ -75,6 +75,7 @@ export default function BarChart({
             const barHeight = Math.max((v / max) * (plotBottom - plotTop), 1);
             const x = i * barWidth;
             const y = plotBottom - barHeight;
+            const isLatest = i === points.length - 1;
             return (
               <rect
                 key={i}
@@ -83,7 +84,13 @@ export default function BarChart({
                 width={Math.max(barWidth - gap, 1)}
                 height={barHeight}
                 fill={color}
+                fillOpacity={isLatest ? 1 : 0.45}
                 rx={1}
+                style={{
+                  transformBox: "fill-box",
+                  transformOrigin: "bottom",
+                  animation: "grow-in 300ms ease-out",
+                }}
               />
             );
           })}
@@ -94,7 +101,10 @@ export default function BarChart({
           range: {formatValue(realMin)}
           {realMin !== realMax ? `–${formatValue(realMax)}` : " (steady)"}
         </span>
-        <span>latest: {formatValue(last)}</span>
+        <span className="flex items-center gap-1 font-medium text-foreground">
+          <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
+          latest: {formatValue(last)}
+        </span>
       </div>
     </div>
   );

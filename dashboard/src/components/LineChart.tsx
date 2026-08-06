@@ -87,6 +87,22 @@ export default function LineChart({
             );
           })}
           <path d={path} fill="none" stroke={color} strokeWidth={2} />
+          {(() => {
+            const [x, y] = toXY(last, points.length - 1);
+            return (
+              <g key={points.length}>
+                <circle
+                  cx={x}
+                  cy={y}
+                  r={4}
+                  fill={color}
+                  className="animate-ping"
+                  style={{ transformBox: "fill-box", transformOrigin: "center" }}
+                />
+                <circle cx={x} cy={y} r={3} fill={color} />
+              </g>
+            );
+          })()}
         </svg>
       </div>
       <div className="mt-1 flex justify-between text-xs text-muted-foreground">
@@ -94,7 +110,10 @@ export default function LineChart({
           range: {formatValue(realMin)}
           {realMin !== realMax ? `–${formatValue(realMax)}` : " (steady)"}
         </span>
-        <span>latest: {formatValue(last)}</span>
+        <span className="flex items-center gap-1 font-medium text-foreground">
+          <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
+          latest: {formatValue(last)}
+        </span>
       </div>
     </div>
   );
