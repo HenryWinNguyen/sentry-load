@@ -26,6 +26,7 @@ type ServerConfig struct {
 
 	TestCooldown time.Duration    // minimum spacing between one user's test submissions (M9); zero disables it
 	History      testHistoryStore // nil disables /tests history persistence/listing (M10) — Postgres not configured
+	Workers      workerCounter    // capacity-aware admission control (M12)
 }
 
 // NewServer wires the coordinator's HTTP API surface: GitHub login (M8),
@@ -49,6 +50,7 @@ func NewServer(cfg ServerConfig) http.Handler {
 		dashboardURL:      cfg.DashboardURL,
 		testCooldown:      cfg.TestCooldown,
 		history:           cfg.History,
+		workers:           cfg.Workers,
 	}
 
 	mux := http.NewServeMux()

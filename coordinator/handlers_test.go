@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -153,6 +154,19 @@ func (f *fakeHistoryStore) GetByShareToken(_ context.Context, shareToken string)
 	return TestSnapshot{}, false, nil
 }
 
+// fakeWorkerCounter is a fixed, non-erroring workerCounter — most tests
+// don't care about capacity admission control at all, so a generous
+// default (5) means fanout/worker_count values used elsewhere in the
+// suite don't get unexpectedly clamped or rejected.
+type fakeWorkerCounter struct {
+	count int
+	err   error
+}
+
+func (f *fakeWorkerCounter) CountLiveWorkers(_ context.Context) (int, error) {
+	return f.count, f.err
+}
+
 // testServer bundles a running httptest server with the stores it was
 // built on, so tests can both drive it over HTTP and inspect state
 // directly.
@@ -193,6 +207,33 @@ func newTestServerWithCooldown(t *testing.T, enqueuer jobEnqueuer, cooldown time
 		OAuthExchange:     &fakeOAuthExchanger{accessToken: "gh-token"},
 		GitHubUsers:       &fakeGitHubUserFetcher{githubID: 1, githubLogin: "henry"},
 		TestCooldown:      cooldown,
+		Workers:           &fakeWorkerCounter{count: 5},
+	})
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	return &testServer{Server: server, domains: domains, tests: tests, users: users}
+}
+
+// newTestServerWithWorkers is like newTestServer but with a configurable
+// workerCounter (M12), for tests of capacity-aware admission control.
+func newTestServerWithWorkers(t *testing.T, enqueuer jobEnqueuer, workers workerCounter) *testServer {
+	t.Helper()
+	domains := NewDomainStore()
+	tests := NewTestStore()
+	users := NewUserStore()
+	handler := NewServer(ServerConfig{
+		Enqueuer:          enqueuer,
+		Tests:             tests,
+		Domains:           domains,
+		Allowlist:         map[string]bool{"allowed.example.com": true},
+		Resolver:          fakeResolver{},
+		HTTPClient:        http.DefaultClient,
+		Users:             users,
+		GitHubClientID:    "test-client-id",
+		GitHubRedirectURL: "http://localhost/auth/github/callback",
+		OAuthExchange:     &fakeOAuthExchanger{accessToken: "gh-token"},
+		GitHubUsers:       &fakeGitHubUserFetcher{githubID: 1, githubLogin: "henry"},
+		Workers:           workers,
 	})
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
@@ -221,6 +262,7 @@ func newTestServerWithHistory(t *testing.T, enqueuer jobEnqueuer) *testServer {
 		OAuthExchange:     &fakeOAuthExchanger{accessToken: "gh-token"},
 		GitHubUsers:       &fakeGitHubUserFetcher{githubID: 1, githubLogin: "henry"},
 		History:           history,
+		Workers:           &fakeWorkerCounter{count: 5},
 	})
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
@@ -245,6 +287,7 @@ func newTestServerWithOAuth(t *testing.T, enqueuer jobEnqueuer, resolver txtLook
 		GitHubRedirectURL: "http://localhost/auth/github/callback",
 		OAuthExchange:     exchanger,
 		GitHubUsers:       fetcher,
+		Workers:           &fakeWorkerCounter{count: 5},
 	})
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
@@ -650,6 +693,75 @@ func TestHandleCreateTestClampsFanoutToVUs(t *testing.T) {
 	})
 	if enqueuer.lastFanout != 1 {
 		t.Fatalf("got fanout %d, want 1 (clamped to VUs)", enqueuer.lastFanout)
+	}
+}
+
+func TestHandleCreateTestRejectsWhenNoWorkersAvailable(t *testing.T) {
+	enqueuer := &fakeEnqueuer{testID: "test-1", subJobIDs: []string{"job-a"}}
+	server := newTestServerWithWorkers(t, enqueuer, &fakeWorkerCounter{count: 0})
+	token := server.login(t)
+
+	resp := authedRequest(t, http.MethodPost, server.URL+"/tests", token, createTestRequest{
+		URL: "http://allowed.example.com/fast", VUs: 10, DurationSeconds: 10, RampPattern: "steady",
+	})
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("got status %d, want 503", resp.StatusCode)
+	}
+	if enqueuer.calls != 0 {
+		t.Fatalf("got %d enqueuer calls, want 0 (should never enqueue with no workers available)", enqueuer.calls)
+	}
+}
+
+func TestHandleCreateTestClampsFanoutToAvailableWorkers(t *testing.T) {
+	enqueuer := &fakeEnqueuer{testID: "test-1", subJobIDs: []string{"job-a", "job-b"}}
+	server := newTestServerWithWorkers(t, enqueuer, &fakeWorkerCounter{count: 2})
+	token := server.login(t)
+
+	resp := authedRequest(t, http.MethodPost, server.URL+"/tests", token, createTestRequest{
+		URL: "http://allowed.example.com/fast", VUs: 20, DurationSeconds: 10, RampPattern: "steady", WorkerCount: 5,
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("got status %d, want 202", resp.StatusCode)
+	}
+	if enqueuer.lastFanout != 2 {
+		t.Fatalf("got fanout %d, want 2 (clamped to available workers)", enqueuer.lastFanout)
+	}
+
+	var got createTestResponse
+	json.NewDecoder(resp.Body).Decode(&got)
+	if got.Warning == "" {
+		t.Fatal("expected a non-empty warning explaining the clamp")
+	}
+}
+
+func TestHandleCreateTestNoWarningWhenCapacitySufficient(t *testing.T) {
+	enqueuer := &fakeEnqueuer{testID: "test-1", subJobIDs: []string{"job-a"}}
+	server := newTestServerWithWorkers(t, enqueuer, &fakeWorkerCounter{count: 5})
+	token := server.login(t)
+
+	resp := authedRequest(t, http.MethodPost, server.URL+"/tests", token, createTestRequest{
+		URL: "http://allowed.example.com/fast", VUs: 10, DurationSeconds: 10, RampPattern: "steady", WorkerCount: 1,
+	})
+	var got createTestResponse
+	json.NewDecoder(resp.Body).Decode(&got)
+	if got.Warning != "" {
+		t.Fatalf("got warning %q, want empty (requested capacity was available)", got.Warning)
+	}
+}
+
+func TestHandleCreateTestCapacityCheckError(t *testing.T) {
+	enqueuer := &fakeEnqueuer{}
+	server := newTestServerWithWorkers(t, enqueuer, &fakeWorkerCounter{err: errors.New("redis unreachable")})
+	token := server.login(t)
+
+	resp := authedRequest(t, http.MethodPost, server.URL+"/tests", token, createTestRequest{
+		URL: "http://allowed.example.com/fast", VUs: 10, DurationSeconds: 10, RampPattern: "steady",
+	})
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("got status %d, want 500", resp.StatusCode)
+	}
+	if enqueuer.calls != 0 {
+		t.Fatalf("got %d enqueuer calls, want 0", enqueuer.calls)
 	}
 }
 

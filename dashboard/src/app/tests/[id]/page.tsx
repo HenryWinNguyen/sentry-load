@@ -60,6 +60,18 @@ export default function TestPage({
   const [shareError, setShareError] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
   const [copied, setCopied] = useState(false);
+  // Read directly off window.location rather than next/navigation's
+  // useSearchParams — that hook needs a Suspense boundary the moment it's
+  // used, and a one-time read on mount doesn't need it.
+  const [capacityWarning, setCapacityWarning] = useState<string | null>(null);
+
+  useEffect(() => {
+    // window doesn't exist during server rendering, so this can only be
+    // read after mount — same reasoning as Nav.tsx's localStorage read.
+    const warning = new URLSearchParams(window.location.search).get("warning");
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (warning) setCapacityWarning(warning);
+  }, []);
 
   useEffect(() => {
     if (!getToken()) {
@@ -169,6 +181,18 @@ export default function TestPage({
         </div>
         <StatusBadge done={snap.done} circuitBroken={snap.circuit_broken} />
       </div>
+
+      {capacityWarning && (
+        <div className="mb-6 flex items-start justify-between gap-3 rounded-lg bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+          <p>{capacityWarning}</p>
+          <button
+            onClick={() => setCapacityWarning(null)}
+            className="cursor-pointer text-xs underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {snap.circuit_broken && (
         <p className="mb-6 rounded-lg bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
