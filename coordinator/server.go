@@ -66,6 +66,9 @@ func NewServer(cfg ServerConfig) http.Handler {
 	// Deliberately not wrapped in requireAuth — a share link's whole point
 	// is that anyone holding it can view the report without logging in.
 	mux.HandleFunc("GET /reports/{token}", s.handlePublicReport)
+	// Also unauthenticated, same reasoning — meant to be embedded as an
+	// <img src="..."> in a README, which can't attach a bearer token.
+	mux.HandleFunc("GET /badge/{token}", s.handleBadge)
 	// Not wrapped in requireAuth: browsers can't set custom headers on a
 	// WebSocket handshake, so this route does its own query-param-based
 	// auth instead (see live.go).
