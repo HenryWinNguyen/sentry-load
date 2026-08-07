@@ -1,0 +1,172 @@
+name: Sentry Load Test
+description: Load-test a URL (e.g. a PR preview deployment) with Sentry Load and report the results.
+branding:
+  icon: activity
+  color: purple
+
+inputs:
+  url:
+    description: The URL to load-test. Must already be verified or allowlisted on your coordinator.
+    required: true
+  coordinator-url:
+    description: Base URL of your Sentry Load coordinator, e.g. https://coordinator.example.com
+    required: true
+  token:
+    description: Bearer token for your Sentry Load account.
+    required: true
+  vus:
+    description: Concurrent virtual users.
+    required: false
+    default: "20"
+  duration-seconds:
+    description: Test duration, in seconds.
+    required: false
+    default: "30"
+  ramp-pattern:
+    description: '"steady" or "ramp".'
+    required: false
+    default: steady
+  worker-count:
+    description: Number of workers to fan the test across.
+    required: false
+    default: "1"
+  comment-on-pr:
+    description: Post a summary comment on the pull request.
+    required: false
+    default: "true"
+  github-token:
+    description: Token used to post the PR comment. Defaults to the workflow's own GITHUB_TOKEN.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  test-id:
+    description: The Sentry Load test ID.
+    value: ${{ steps.run-test.outputs.test-id }}
+  total-requests:
+    value: ${{ steps.run-test.outputs.total-requests }}
+  total-errors:
+    value: ${{ steps.run-test.outputs.total-errors }}
+  combined-rps:
+    value: ${{ steps.run-test.outputs.combined-rps }}
+  circuit-broken:
+    value: ${{ steps.run-test.outputs.circuit-broken }}
+  report-url:
+    description: Public report link, if the coordinator has sharing enabled (Postgres configured).
+    value: ${{ steps.run-test.outputs.report-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Submit and poll the load test
+      id: run-test
+      shell: bash
+      env:
+        COORDINATOR_URL: ${{ inputs.coordinator-url }}
+        TARGET_URL: ${{ inputs.url }}
+        SENTRY_LOAD_TOKEN: ${{ inputs.token }}
+        VUS: ${{ inputs.vus }}
+        DURATION_SECONDS: ${{ inputs.duration-seconds }}
+        RAMP_PATTERN: ${{ inputs.ramp-pattern }}
+        WORKER_COUNT: ${{ inputs.worker-count }}
+      run: |
+        set -euo pipefail
+
+        body=$(jq -n \
+          --arg url "$TARGET_URL" \
+          --argjson vus "$VUS" \
+          --argjson duration_seconds "$DURATION_SECONDS" \
+          --arg ramp_pattern "$RAMP_PATTERN" \
+          --argjson worker_count "$WORKER_COUNT" \
+          '{url: $url, vus: $vus, duration_seconds: $duration_seconds, ramp_pattern: $ramp_pattern, worker_count: $worker_count}')
+
+        resp=$(curl -sf -X POST "$COORDINATOR_URL/tests" \
+          -H "Authorization: Bearer $SENTRY_LOAD_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d "$body")
+
+        test_id=$(echo "$resp" | jq -r '.test_id')
+        warning=$(echo "$resp" | jq -r '.warning // empty')
+        if [ -n "$warning" ]; then
+          echo "::warning::$warning"
+        fi
+        echo "Submitted test $test_id, polling for completion..."
+
+        # A generous ceiling above the test's own configured duration --
+        # the test itself can't run longer than that, this just bounds how
+        # long the action waits for it plus network/scheduling slack.
+        deadline=$(( $(date +%s) + DURATION_SECONDS + 60 ))
+        status=""
+        while true; do
+          status=$(curl -sf "$COORDINATOR_URL/tests/$test_id" -H "Authorization: Bearer $SENTRY_LOAD_TOKEN")
+          if [ "$(echo "$status" | jq -r '.done')" = "true" ]; then
+            break
+          fi
+          if [ "$(date +%s)" -ge "$deadline" ]; then
+            echo "::error::Test $test_id did not finish within the expected time"
+            exit 1
+          fi
+          sleep 3
+        done
+
+        total_requests=$(echo "$status" | jq -r '.total_requests')
+        total_errors=$(echo "$status" | jq -r '.total_errors')
+        combined_rps=$(echo "$status" | jq -r '.combined_rps')
+        circuit_broken=$(echo "$status" | jq -r '.circuit_broken')
+
+        # Best-effort -- a coordinator with no Postgres configured has
+        # sharing disabled, and that shouldn't fail the whole action.
+        share_resp=$(curl -sf -X POST "$COORDINATOR_URL/tests/$test_id/share" -H "Authorization: Bearer $SENTRY_LOAD_TOKEN" || echo '{}')
+        report_url=$(echo "$share_resp" | jq -r '.share_url // empty')
+
+        {
+          echo "test-id=$test_id"
+          echo "total-requests=$total_requests"
+          echo "total-errors=$total_errors"
+          echo "combined-rps=$combined_rps"
+          echo "circuit-broken=$circuit_broken"
+          echo "report-url=$report_url"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Comment on pull request
+      if: inputs.comment-on-pr == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        TARGET_URL: ${{ inputs.url }}
+        TOTAL_REQUESTS: ${{ steps.run-test.outputs.total-requests }}
+        TOTAL_ERRORS: ${{ steps.run-test.outputs.total-errors }}
+        COMBINED_RPS: ${{ steps.run-test.outputs.combined-rps }}
+        CIRCUIT_BROKEN: ${{ steps.run-test.outputs.circuit-broken }}
+        REPORT_URL: ${{ steps.run-test.outputs.report-url }}
+      run: |
+        set -euo pipefail
+
+        status_line="Passed"
+        if [ "$CIRCUIT_BROKEN" = "true" ]; then
+          status_line="Circuit-broken — the target's error rate spiked mid-test"
+        fi
+        link_line=""
+        if [ -n "$REPORT_URL" ]; then
+          link_line="[View full report]($REPORT_URL)"
+        fi
+
+        body=$(cat <<BODY
+        ### Sentry Load results
+
+        **Target:** $TARGET_URL
+        **Status:** $status_line
+        **Requests:** $TOTAL_REQUESTS ($TOTAL_ERRORS errors)
+        **Combined RPS:** $COMBINED_RPS
+
+        $link_line
+        BODY
+        )
+
+        curl -sf -X POST \
+          -H "Authorization: Bearer $GH_TOKEN" \
+          -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments" \
+          -d "$(jq -n --arg body "$body" '{body: $body}')"
