@@ -16,6 +16,36 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 
+// Presets tuned to indie-launch scale (SCOPE.md M14), not raw enterprise
+// configurability — just enough to get a first-timer to a sensible test
+// without having to know what a VU or a ramp pattern is.
+const PRESETS = [
+  {
+    key: "quick-check",
+    label: "Quick Check",
+    description: "60s, ~50 users — a fast sanity check before you ship.",
+    vus: "50",
+    durationSeconds: "60",
+    rampPattern: "steady" as const,
+  },
+  {
+    key: "launch-day",
+    label: "Launch Day",
+    description: "5 min ramp to 200 users — simulates a real traffic spike.",
+    vus: "200",
+    durationSeconds: "300",
+    rampPattern: "ramp" as const,
+  },
+  {
+    key: "class-demo",
+    label: "Class Demo",
+    description: "2 min, steady moderate load — good for showing off live.",
+    vus: "30",
+    durationSeconds: "120",
+    rampPattern: "steady" as const,
+  },
+];
+
 const RAMP_PATTERNS = [
   {
     value: "steady" as const,
@@ -46,6 +76,14 @@ export default function TestsPage() {
   const [rampPattern, setRampPattern] =
     useState<(typeof RAMP_PATTERNS)[number]["value"]>("steady");
   const [workerCount, setWorkerCount] = useState("1");
+  const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
+
+  function applyPreset(preset: (typeof PRESETS)[number]) {
+    setVus(preset.vus);
+    setDurationSeconds(preset.durationSeconds);
+    setRampPattern(preset.rampPattern);
+    setSelectedPreset(preset.key);
+  }
 
   useEffect(() => {
     if (!getToken()) {
@@ -109,6 +147,40 @@ export default function TestsPage() {
         <CardContent>
           <form onSubmit={submit} className="space-y-6">
             <div className="space-y-1.5">
+              <Label>Quick presets</Label>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                {PRESETS.map((preset) => (
+                  <button
+                    type="button"
+                    key={preset.key}
+                    onClick={() => applyPreset(preset)}
+                    className={`cursor-pointer rounded-lg border p-3 text-left text-sm transition-colors ${
+                      selectedPreset === preset.key
+                        ? "border-primary bg-primary/5 ring-1 ring-primary"
+                        : "border-border hover:border-foreground/30"
+                    }`}
+                  >
+                    <p
+                      className={
+                        selectedPreset === preset.key
+                          ? "font-medium text-primary"
+                          : "font-medium"
+                      }
+                    >
+                      {preset.label}
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {preset.description}
+                    </p>
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Or configure everything below manually.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
               <Label htmlFor="url">Target URL</Label>
               <Input
                 id="url"
@@ -132,7 +204,10 @@ export default function TestsPage() {
                   min={1}
                   max={200}
                   value={vus}
-                  onChange={(e) => setVus(e.target.value)}
+                  onChange={(e) => {
+                    setVus(e.target.value);
+                    setSelectedPreset(null);
+                  }}
                 />
                 <p className="text-xs text-muted-foreground">
                   How many simulated visitors hit your app at once.
@@ -147,7 +222,10 @@ export default function TestsPage() {
                     min={1}
                     max={300}
                     value={durationSeconds}
-                    onChange={(e) => setDurationSeconds(e.target.value)}
+                    onChange={(e) => {
+                      setDurationSeconds(e.target.value);
+                      setSelectedPreset(null);
+                    }}
                   />
                   <span className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-xs text-muted-foreground">
                     sec
@@ -166,7 +244,10 @@ export default function TestsPage() {
                   <button
                     type="button"
                     key={p.value}
-                    onClick={() => setRampPattern(p.value)}
+                    onClick={() => {
+                      setRampPattern(p.value);
+                      setSelectedPreset(null);
+                    }}
                     className={`cursor-pointer rounded-lg border p-3 text-left text-sm transition-colors ${
                       rampPattern === p.value
                         ? "border-primary bg-primary/5 ring-1 ring-primary"
