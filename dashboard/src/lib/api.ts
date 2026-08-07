@@ -160,6 +160,14 @@ export function shareTest(
   return request(`/tests/${id}/share`, { method: "POST" });
 }
 
+// badgeUrl builds the embeddable SVG badge URL for a share token — served
+// straight from the coordinator (not the dashboard), since it's meant to
+// be dropped into a README's <img src="..."> with no dashboard involved
+// at all (M15).
+export function badgeUrl(shareToken: string): string {
+  return `${COORDINATOR_URL}/badge/${shareToken}`;
+}
+
 // getPublicReport hits GET /reports/{token} directly rather than through
 // request() — that helper attaches a bearer token when one exists in
 // localStorage, but a shared report is meant to be viewable by someone

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   ApiError,
   TestSnapshot,
+  badgeUrl,
   getTest,
   getToken,
   shareTest,
@@ -57,9 +58,11 @@ export default function TestPage({
   const [errorsHistory, setErrorsHistory] = useState<number[]>([]);
   const [rpsHistory, setRpsHistory] = useState<number[]>([]);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [shareToken, setShareToken] = useState<string | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [embedCopied, setEmbedCopied] = useState(false);
   // Read directly off window.location rather than next/navigation's
   // useSearchParams — that hook needs a Suspense boundary the moment it's
   // used, and a one-time read on mount doesn't need it.
@@ -114,8 +117,9 @@ export default function TestPage({
     setShareError(null);
     setSharing(true);
     try {
-      const { share_url } = await shareTest(id);
+      const { share_url, share_token } = await shareTest(id);
       setShareUrl(share_url);
+      setShareToken(share_token);
     } catch (err) {
       setShareError(err instanceof ApiError ? err.message : "Something went wrong.");
     } finally {
@@ -128,6 +132,14 @@ export default function TestPage({
     await navigator.clipboard.writeText(shareUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function copyEmbedCode() {
+    if (!shareToken || !shareUrl) return;
+    const markdown = `[![Load tested by Sentry Load](${badgeUrl(shareToken)})](${shareUrl})`;
+    await navigator.clipboard.writeText(markdown);
+    setEmbedCopied(true);
+    setTimeout(() => setEmbedCopied(false), 2000);
   }
 
   if (!snap) {
@@ -342,6 +354,24 @@ export default function TestPage({
               <Input readOnly value={shareUrl} className="font-mono text-xs" />
               <Button variant="outline" onClick={copyShareUrl}>
                 {copied ? "Copied" : "Copy"}
+              </Button>
+            </div>
+          )}
+
+          {shareToken && (
+            <div className="flex items-center justify-between gap-3 border-t pt-3">
+              <div className="flex items-center gap-2">
+                {/* A dynamically-generated SVG from the coordinator, not a
+                    static local asset — next/image's optimizer doesn't apply
+                    here, a plain img is the right tool. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={badgeUrl(shareToken)} alt="Load tested by Sentry Load" />
+                <span className="text-xs text-muted-foreground">
+                  Embed this in your README
+                </span>
+              </div>
+              <Button variant="outline" size="sm" onClick={copyEmbedCode}>
+                {embedCopied ? "Copied" : "Copy embed code"}
               </Button>
             </div>
           )}
