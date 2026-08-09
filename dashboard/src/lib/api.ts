@@ -41,6 +41,11 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     ...options,
     headers: {
       "Content-Type": "application/json",
+      // The coordinator is tunneled through ngrok's free tier, which
+      // intercepts every request (including background fetches, not just
+      // page navigations) with an HTML "abuse interstitial" unless this
+      // header is present. Harmless no-op against any other host.
+      "ngrok-skip-browser-warning": "true",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
@@ -173,7 +178,9 @@ export function badgeUrl(shareToken: string): string {
 // localStorage, but a shared report is meant to be viewable by someone
 // with no account at all, so this deliberately never sends one.
 export async function getPublicReport(token: string): Promise<TestSnapshot> {
-  const res = await fetch(`${COORDINATOR_URL}/reports/${token}`);
+  const res = await fetch(`${COORDINATOR_URL}/reports/${token}`, {
+    headers: { "ngrok-skip-browser-warning": "true" },
+  });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}) as { error?: string });
     throw new ApiError(res.status, body.error || `request failed: ${res.status}`);
