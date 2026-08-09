@@ -86,6 +86,17 @@ func main() {
 				continue
 			}
 			log.Printf("read error: %v", err)
+			// NOGROUP means the stream/group got wiped out from under us
+			// (e.g. a manual Redis flush) — recreate it rather than
+			// spinning forever on the same error. Any other error also
+			// gets the sleep below so a persistent Redis outage doesn't
+			// turn into a tight retry loop burning CPU.
+			if isNoGroup(err) {
+				if cerr := rdb.XGroupCreateMkStream(ctx, jobsStream, consumerGroup, "0").Err(); cerr != nil && !isBusyGroup(cerr) {
+					log.Printf("failed to recreate consumer group: %v", cerr)
+				}
+			}
+			time.Sleep(2 * time.Second)
 			continue
 		}
 
@@ -126,6 +137,10 @@ func heartbeat(ctx context.Context, rdb *redis.Client, consumerName string) {
 
 func isBusyGroup(err error) bool {
 	return err != nil && len(err.Error()) >= 9 && err.Error()[:9] == "BUSYGROUP"
+}
+
+func isNoGroup(err error) bool {
+	return err != nil && len(err.Error()) >= 7 && err.Error()[:7] == "NOGROUP"
 }
 
 // handleJob parses, validates, and runs a load test for one job, streaming
