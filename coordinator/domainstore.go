@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -103,6 +104,19 @@ func isValidDomainName(domain string) bool {
 		return false
 	}
 	return hostnameRE.MatchString(domain)
+}
+
+// isValidWebhookURL applies the same host-shape check as
+// isValidDomainName to a webhook URL's hostname — a webhook is another
+// case of the coordinator making an outbound request to a user-supplied
+// destination (see handleSetWebhook), so it's exposed to the same SSRF
+// class as domain verification and gets the same defense.
+func isValidWebhookURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return false
+	}
+	return isValidDomainName(u.Hostname())
 }
 
 func randomToken() (string, error) {

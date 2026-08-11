@@ -91,7 +91,8 @@ func main() {
 		log.Print("POSTGRES_URL not set — test history (GET /tests) disabled, rest of the API still works")
 	}
 
-	go watchResults(ctx, rdb, tests, history)
+	webhooks := &chatWebhookNotifier{httpClient: http.DefaultClient}
+	go watchResults(ctx, rdb, tests, history, users, webhooks, dashboardURL)
 	go refreshLiveWorkersGauge(ctx, workers)
 
 	handler := NewServer(ServerConfig{

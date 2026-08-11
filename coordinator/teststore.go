@@ -216,6 +216,11 @@ type TestSnapshot struct {
 	TotalErrors   int              `json:"total_errors"`
 	CombinedRPS   float64          `json:"combined_rps"`
 	SubJobs       []SubJobSnapshot `json:"sub_jobs"`
+	// FinishedAt is only populated for snapshots loaded from Postgres
+	// history (nil for anything still live in TestStore) — used for the
+	// per-target trend view, which needs a real timestamp to chart
+	// against, not just insertion order.
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
 
 // Snapshot returns the current state of testID, scoped to ownerID — a test

@@ -99,6 +99,9 @@ export interface TestSnapshot {
   total_errors: number;
   combined_rps: number;
   sub_jobs: SubJobSnapshot[] | null;
+  // Only set on snapshots that came from test history (list/trend), not
+  // a live in-flight test.
+  finished_at?: string;
 }
 
 export function listTests(): Promise<TestSnapshot[]> {
@@ -107,6 +110,12 @@ export function listTests(): Promise<TestSnapshot[]> {
 
 export function getTest(id: string): Promise<TestSnapshot> {
   return request<TestSnapshot>(`/tests/${id}`);
+}
+
+// getTestTrend returns the caller's past finished tests against url,
+// oldest first — the series behind the per-target trend view.
+export function getTestTrend(url: string): Promise<TestSnapshot[]> {
+  return request<TestSnapshot[]>(`/tests/trend?url=${encodeURIComponent(url)}`);
 }
 
 export interface CreateTestInput {
@@ -186,4 +195,22 @@ export async function getPublicReport(token: string): Promise<TestSnapshot> {
     throw new ApiError(res.status, body.error || `request failed: ${res.status}`);
   }
   return res.json();
+}
+
+export interface WebhookSettings {
+  webhook_url: string;
+}
+
+// getWebhookSettings/setWebhookSettings manage the Discord/Slack chat
+// webhook the coordinator notifies whenever one of the caller's tests
+// finishes.
+export function getWebhookSettings(): Promise<WebhookSettings> {
+  return request<WebhookSettings>("/me/webhook");
+}
+
+export function setWebhookSettings(webhookUrl: string): Promise<WebhookSettings> {
+  return request<WebhookSettings>("/me/webhook", {
+    method: "PUT",
+    body: JSON.stringify({ webhook_url: webhookUrl }),
+  });
 }
