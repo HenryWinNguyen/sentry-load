@@ -43,7 +43,7 @@ func main() {
 		consumerName = "worker-1"
 	}
 
-	rdb := redis.NewClient(&redis.Options{Addr: addr})
+	rdb := redis.NewClient(&redis.Options{Addr: addr, Password: os.Getenv("REDIS_PASSWORD")})
 
 	pingCtx, cancelPing := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelPing()

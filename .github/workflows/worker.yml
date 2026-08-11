@@ -34,5 +34,10 @@ jobs:
       - name: Run worker
         env:
           REDIS_ADDR: ${{ inputs.redis_addr }}
+          # Redis is password-protected (2026-08-10, after an exposed
+          # unauthenticated instance got opportunistically attacked — see
+          # docs/PROGRESS.md). Set as a repo secret, not a workflow input,
+          # since inputs are visible in the Actions UI/logs.
+          REDIS_PASSWORD: ${{ secrets.SENTRY_LOAD_REDIS_PASSWORD }}
           WORKER_ID: gha-${{ github.run_id }}
         run: timeout "${{ inputs.run_seconds }}"s ./worker/worker || true
