@@ -124,6 +124,17 @@ Cloud e2-micro Always Free instance in a different region as a second
 source. Exact combo gets pressure-tested hands-on at V1-M5, not locked in
 now, since free-tier terms keep shifting.
 
+**Update (2026-08-10):** what's actually deployed right now is simpler —
+one always-on worker process on the same VM as the coordinator, not the
+ephemeral-GitHub-Actions-runner model above. The `.github/workflows/
+worker.yml` ephemeral-worker workflow described above still exists and
+still works, but it depended on Redis being reachable from the public
+internet with no password — which got opportunistically attacked within
+weeks of being exposed (see `docs/PROGRESS.md`'s 2026-08-10 entry). That
+port is now closed. Re-enabling the ephemeral-runner path needs a Redis
+password threaded through as a GitHub secret first — not done, no
+timeline.
+
 ## V1 — walking skeleton
 
 Goal: prove the coordinator → queue → worker → target → metrics loop works

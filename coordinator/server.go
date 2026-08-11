@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // ServerConfig is everything NewServer needs to wire up the coordinator's
@@ -55,6 +57,10 @@ func NewServer(cfg ServerConfig) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	// Unauthenticated, standard practice for Prometheus scraping (M13) — no
+	// sensitive data here, just request/latency counters and Go runtime
+	// stats (goroutines, GC, memory).
+	mux.Handle("GET /metrics", promhttp.Handler())
 	mux.HandleFunc("GET /auth/github/login", s.handleGithubLogin)
 	mux.HandleFunc("GET /auth/github/callback", s.handleGithubCallback)
 	mux.HandleFunc("POST /domains", s.requireAuth(s.handleCreateDomainChallenge))
@@ -74,7 +80,7 @@ func NewServer(cfg ServerConfig) http.Handler {
 	// auth instead (see live.go).
 	mux.HandleFunc("GET /tests/{id}/live", s.handleTestLive)
 
-	return withCORS(cfg.DashboardURL, mux)
+	return metricsMiddleware(withCORS(cfg.DashboardURL, mux))
 }
 
 // withCORS lets the dashboard (a different origin — localhost:3000 vs the
@@ -87,7 +93,7 @@ func withCORS(allowedOrigin string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if allowedOrigin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, ngrok-skip-browser-warning")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		}
 		if r.Method == http.MethodOptions {

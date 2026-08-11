@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "sentry-load-coordinator"
+    static_configs:
+      - targets: ["localhost:8080"]
+
+  - job_name: "sentry-load-worker"
+    static_configs:
+      - targets: ["localhost:9091"]
+
+# Ships everything scraped above to Grafana Cloud's free-tier Prometheus
+# endpoint for actual dashboarding — local storage here is just a short
+# buffer (see --storage.tsdb.retention.time in the start command), not the
+# long-term store. Fill in url/username/password once Henry has signed up
+# for Grafana Cloud and generated an API key (M13), then uncomment.
+#
+# remote_write:
+#   - url: "https://<GRAFANA_CLOUD_PROMETHEUS_REMOTE_WRITE_URL>"
+#     basic_auth:
+#       username: "<GRAFANA_CLOUD_INSTANCE_ID>"
+#       password: "<GRAFANA_CLOUD_API_KEY>"

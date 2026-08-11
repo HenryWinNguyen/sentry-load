@@ -92,6 +92,7 @@ func main() {
 	}
 
 	go watchResults(ctx, rdb, tests, history)
+	go refreshLiveWorkersGauge(ctx, workers)
 
 	handler := NewServer(ServerConfig{
 		Enqueuer:          enqueuer,

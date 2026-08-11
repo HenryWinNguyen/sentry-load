@@ -64,6 +64,12 @@ func main() {
 
 	go heartbeat(ctx, rdb, consumerName)
 
+	metricsAddr := os.Getenv("METRICS_ADDR")
+	if metricsAddr == "" {
+		metricsAddr = ":9091"
+	}
+	go serveMetrics(metricsAddr)
+
 	log.Printf("%s listening on stream %q (group %q)", consumerName, jobsStream, consumerGroup)
 
 	for {
@@ -160,7 +166,27 @@ func handleJob(ctx context.Context, rdb *redis.Client, values map[string]interfa
 	log.Printf("running job %s: %s vus=%d duration=%ds pattern=%s",
 		job.ID, job.URL, job.VUs, job.DurationSeconds, job.RampPattern)
 
+	jobsInProgress.Inc()
+	defer jobsInProgress.Dec()
+
+	// m.Requests/m.Errors are cumulative since the job started, not
+	// per-tick — track what's already been counted so the Prometheus
+	// counters only advance by each tick's delta instead of double-adding
+	// the running total on every publish call.
+	var countedRequests, countedErrors int
 	publish := func(m Metrics) {
+		if delta := m.Requests - countedRequests; delta > 0 {
+			requestsGeneratedTotal.Add(float64(delta))
+			countedRequests = m.Requests
+		}
+		if delta := m.Errors - countedErrors; delta > 0 {
+			requestErrorsTotal.Add(float64(delta))
+			countedErrors = m.Errors
+		}
+		if m.Done {
+			jobsTotal.WithLabelValues(strconv.FormatBool(m.CircuitBroken)).Inc()
+		}
+
 		fields := map[string]interface{}{
 			"job_id":         m.JobID,
 			"test_id":        job.TestID,

@@ -344,7 +344,9 @@ func (s *apiServer) handleCreateTest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to check worker capacity")
 		return
 	}
+	liveWorkersGauge.Set(float64(liveWorkers))
 	if liveWorkers == 0 {
+		testsCreatedTotal.WithLabelValues("no_capacity").Inc()
 		writeError(w, http.StatusServiceUnavailable, "no workers are currently available; try again shortly")
 		return
 	}
@@ -362,6 +364,11 @@ func (s *apiServer) handleCreateTest(w http.ResponseWriter, r *http.Request) {
 	}
 	s.tests.Register(testID, user.ID, req.URL, subJobIDs)
 
+	if warning != "" {
+		testsCreatedTotal.WithLabelValues("clamped").Inc()
+	} else {
+		testsCreatedTotal.WithLabelValues("accepted").Inc()
+	}
 	writeJSON(w, http.StatusAccepted, createTestResponse{TestID: testID, SubJobIDs: subJobIDs, Warning: warning})
 }
 
