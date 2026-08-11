@@ -523,6 +523,33 @@ func TestHandleCreateDomainChallenge(t *testing.T) {
 	}
 }
 
+// TestHandleCreateDomainChallengeRejectsSSRFVectors guards against the
+// SSRF gap found in review: the coordinator itself makes an outbound DNS
+// lookup or HTTP request against whatever "domain" a caller supplies
+// (VerifyDomainTXT/VerifyDomainWellKnown), so an IP literal or a
+// local-looking name must be rejected up front rather than accepted and
+// only discovered to be a problem once something tries to fetch it.
+func TestHandleCreateDomainChallengeRejectsSSRFVectors(t *testing.T) {
+	server := newTestServer(t, &fakeEnqueuer{}, fakeResolver{}, http.DefaultClient)
+	token := server.login(t)
+
+	for _, domain := range []string{
+		"127.0.0.1",
+		"169.254.169.254", // cloud metadata address
+		"localhost",
+		"internal.localhost",
+		"::1",
+		"not-a-real-hostname-no-dot",
+	} {
+		t.Run(domain, func(t *testing.T) {
+			resp := authedRequest(t, http.MethodPost, server.URL+"/domains", token, createDomainRequest{Domain: domain})
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("domain %q: got status %d, want 400", domain, resp.StatusCode)
+			}
+		})
+	}
+}
+
 func TestHandleVerifyDomainWithoutChallenge(t *testing.T) {
 	server := newTestServer(t, &fakeEnqueuer{}, fakeResolver{}, http.DefaultClient)
 	token := server.login(t)
@@ -555,8 +582,9 @@ func TestHandleVerifyDomainDNSSuccess(t *testing.T) {
 	if !got.Verified {
 		t.Fatal("expected verified=true")
 	}
-	if !server.domains.IsVerified("example.com") {
-		t.Fatal("expected DomainStore to record example.com as verified")
+	user, _ := server.users.FindOrCreate(1, "henry")
+	if !server.domains.IsVerified("example.com", user.ID) {
+		t.Fatal("expected DomainStore to record example.com as verified for this user")
 	}
 }
 
@@ -574,7 +602,8 @@ func TestHandleVerifyDomainDNSWrongToken(t *testing.T) {
 	if got.Verified {
 		t.Fatal("expected verified=false for a mismatched token")
 	}
-	if server.domains.IsVerified("example.com") {
+	user, _ := server.users.FindOrCreate(1, "henry")
+	if server.domains.IsVerified("example.com", user.ID) {
 		t.Fatal("expected DomainStore to not mark an unverified domain as verified")
 	}
 }
@@ -597,7 +626,8 @@ func TestHandleVerifyDomainDNSLookupErrorReadsAsUnverified(t *testing.T) {
 	if got.Verified {
 		t.Fatal("expected verified=false for a domain with no TXT record yet")
 	}
-	if server.domains.IsVerified("example.com") {
+	user, _ := server.users.FindOrCreate(1, "henry")
+	if server.domains.IsVerified("example.com", user.ID) {
 		t.Fatal("expected DomainStore to not mark the domain as verified")
 	}
 }
@@ -625,8 +655,9 @@ func TestHandleVerifyDomainWellKnownSuccess(t *testing.T) {
 	if !got.Verified {
 		t.Fatal("expected verified=true")
 	}
-	if !server.domains.IsVerified("example.com") {
-		t.Fatal("expected DomainStore to record example.com as verified")
+	user, _ := server.users.FindOrCreate(1, "henry")
+	if !server.domains.IsVerified("example.com", user.ID) {
+		t.Fatal("expected DomainStore to record example.com as verified for this user")
 	}
 }
 
@@ -639,6 +670,57 @@ func TestHandleCreateTestRejectsUnverifiedDomain(t *testing.T) {
 	})
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("got status %d, want 403", resp.StatusCode)
+	}
+}
+
+// TestHandleCreateTestDomainVerificationNotSharedAcrossUsers guards
+// against the exact bug found in review: one user proving ownership of a
+// domain must not let a *different* user load-test that same domain —
+// that would defeat the entire point of requiring verification (see
+// CLAUDE.md/SCOPE.md's non-negotiable safety line against becoming a
+// DDoS-as-a-service tool).
+func TestHandleCreateTestDomainVerificationNotSharedAcrossUsers(t *testing.T) {
+	resolver := fakeResolver{}
+	server := newTestServer(t, &fakeEnqueuer{}, &resolver, http.DefaultClient)
+
+	userA, err := server.users.FindOrCreate(1, "user-a")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tokenA, err := server.users.IssueSession(userA.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	userB, err := server.users.FindOrCreate(2, "user-b")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tokenB, err := server.users.IssueSession(userB.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// user-a verifies victim.com for real.
+	challengeResp := authedRequest(t, http.MethodPost, server.URL+"/domains", tokenA, createDomainRequest{Domain: "victim.com"})
+	var challenge createDomainResponse
+	json.NewDecoder(challengeResp.Body).Decode(&challenge)
+	resolver.records = map[string][]string{
+		"_sentryload-verify.victim.com": {challenge.Token},
+	}
+	verifyResp := authedRequest(t, http.MethodPost, server.URL+"/domains/victim.com/verify", tokenA, verifyDomainRequest{Method: "dns"})
+	var verifyGot verifyDomainResponse
+	json.NewDecoder(verifyResp.Body).Decode(&verifyGot)
+	if !verifyGot.Verified {
+		t.Fatal("expected user-a to successfully verify victim.com")
+	}
+
+	// user-b, who has never proven anything about victim.com, tries to
+	// load-test it on the strength of user-a's verification.
+	resp := authedRequest(t, http.MethodPost, server.URL+"/tests", tokenB, createTestRequest{
+		URL: "http://victim.com/fast", VUs: 10, DurationSeconds: 10, RampPattern: "steady",
+	})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("got status %d, want 403 — user-b must not be able to target a domain only user-a verified", resp.StatusCode)
 	}
 }
 
