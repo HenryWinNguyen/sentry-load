@@ -29,23 +29,18 @@ per-test live dashboard (M10) which is about one test's own results.
 - 6h local retention — local storage is just a short buffer, Grafana Cloud
   is meant to be the actual long-term store once wired up below.
 
-## What's left — needs Henry (new external account)
+## Status: done (2026-08-10)
 
-1. Sign up for Grafana Cloud's free tier at grafana.com.
-2. In the Grafana Cloud portal: Connections → Add new connection →
-   Prometheus. Copy the **remote_write endpoint URL**, **instance
-   ID/username**, and generate an **API key**.
-3. On the VM, edit `~/prometheus-install/prometheus.yml`, uncomment the
-   `remote_write` block, fill in those three values, then restart
-   Prometheus (`pkill -x prometheus`, then the same `nohup ./prometheus
-   --config.file=prometheus.yml --web.listen-address=127.0.0.1:9090
-   --storage.tsdb.path=./data --storage.tsdb.retention.time=6h` command
-   from `~/prometheus-install/`).
-4. In Grafana Cloud's UI, import `grafana-dashboard.json` (Dashboards →
-   New → Import → upload/paste JSON), pick the auto-provisioned Prometheus
-   datasource when prompted.
-5. Confirm data is flowing: run a test from the live dashboard, watch the
-   panels update in Grafana Cloud within ~30s.
+Grafana Cloud free tier is wired up and confirmed working:
+- `remote_write` configured on the VM's Prometheus (credentials live only
+  on the VM, in `~/prometheus-install/prometheus.yml` — never committed;
+  `ops/prometheus.yml` in git stays a placeholder template)
+- `grafana-dashboard.json` imported into Grafana Cloud as "Sentry Load —
+  fleet health", confirmed pulling live data
+- `prometheus_remote_storage_samples_failed_total` = 0 at time of setup —
+  clean push, no auth/format issues
 
-Once that's done, M13 is complete — merge `m13-prometheus-grafana` to
-`main`.
+If the API token ever needs rotating: Grafana Cloud portal → Connections
+→ your Prometheus connection → manage access policies, generate a new
+token, update the `password` field in the VM's `prometheus.yml`, restart
+Prometheus the same way described in the log below.
