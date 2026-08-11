@@ -4,7 +4,7 @@ import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { ApiError, TestSnapshot, getPublicReport } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import StatusDot, { testStatus } from "@/components/StatusDot";
 import {
   Card,
   CardContent,
@@ -20,6 +20,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+
+// Smaller, letter-spaced, muted column labels read as a data table built
+// with intent — the shadcn default (same size/weight as the body text)
+// doesn't visually separate "this is a header" from "this is a value."
+const TH_LABEL = "h-8 text-[11px] font-medium tracking-wide text-muted-foreground uppercase";
 
 // A shared report is meant to be viewable by anyone holding the link, no
 // account needed — this page never calls anything that requires a bearer
@@ -78,15 +83,7 @@ export default function PublicReportPage({
             {snap.url}
           </h1>
         </div>
-        {snap.circuit_broken ? (
-          <Badge className="bg-amber-500/15 text-amber-700 dark:text-amber-400">
-            Circuit-broken
-          </Badge>
-        ) : (
-          <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-400">
-            Done
-          </Badge>
-        )}
+        <StatusDot status={testStatus(true, snap.circuit_broken)} size="md" />
       </div>
 
       <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -111,28 +108,40 @@ export default function PublicReportPage({
         <CardContent>
           <Table>
             <TableHeader>
-              <TableRow>
-                <TableHead>Worker</TableHead>
-                <TableHead>Requests</TableHead>
-                <TableHead>Errors</TableHead>
-                <TableHead>RPS</TableHead>
-                <TableHead>p50</TableHead>
-                <TableHead>p95</TableHead>
-                <TableHead>p99</TableHead>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className={TH_LABEL}>Worker</TableHead>
+                <TableHead className={`${TH_LABEL} text-right`}>Requests</TableHead>
+                <TableHead className={`${TH_LABEL} text-right`}>Errors</TableHead>
+                <TableHead className={`${TH_LABEL} text-right`}>RPS</TableHead>
+                <TableHead className={`${TH_LABEL} text-right`}>p50</TableHead>
+                <TableHead className={`${TH_LABEL} text-right`}>p95</TableHead>
+                <TableHead className={`${TH_LABEL} text-right`}>p99</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {(snap.sub_jobs ?? []).map((sj) => (
                 <TableRow key={sj.job_id}>
-                  <TableCell className="font-mono text-xs">
+                  <TableCell className="font-mono text-xs text-muted-foreground">
                     {sj.job_id.slice(0, 8)}
                   </TableCell>
-                  <TableCell>{sj.requests}</TableCell>
-                  <TableCell>{sj.errors}</TableCell>
-                  <TableCell>{sj.rps.toFixed(1)}</TableCell>
-                  <TableCell>{sj.p50_ms}ms</TableCell>
-                  <TableCell>{sj.p95_ms}ms</TableCell>
-                  <TableCell>{sj.p99_ms}ms</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {sj.requests.toLocaleString()}
+                  </TableCell>
+                  <TableCell
+                    className={`text-right tabular-nums ${sj.errors > 0 ? "text-destructive" : ""}`}
+                  >
+                    {sj.errors.toLocaleString()}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">{sj.rps.toFixed(1)}</TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">
+                    {sj.p50_ms}ms
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">
+                    {sj.p95_ms}ms
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">
+                    {sj.p99_ms}ms
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

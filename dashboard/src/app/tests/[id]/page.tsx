@@ -15,7 +15,6 @@ import {
 } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -34,6 +33,7 @@ import {
 import LineChart from "@/components/LineChart";
 import BarChart from "@/components/BarChart";
 import AnimatedNumber from "@/components/AnimatedNumber";
+import StatusDot, { testStatus } from "@/components/StatusDot";
 
 // Cumulative totals climb every tick regardless of what's actually
 // happening right now, which buries spikes — a jump from 0 to 20 errors
@@ -43,6 +43,11 @@ import AnimatedNumber from "@/components/AnimatedNumber";
 function toPerTickDeltas(cumulative: number[]): number[] {
   return cumulative.map((v, i) => (i === 0 ? v : Math.max(v - cumulative[i - 1], 0)));
 }
+
+// Smaller, letter-spaced, muted column labels read as a data table built
+// with intent — the shadcn default (same size/weight as the body text)
+// doesn't visually separate "this is a header" from "this is a value."
+const TH_LABEL = "h-8 text-[11px] font-medium tracking-wide text-muted-foreground uppercase";
 
 export default function TestPage({
   params,
@@ -305,39 +310,43 @@ export default function TestPage({
         <CardContent>
           <Table>
             <TableHeader>
-              <TableRow>
-                <TableHead>Worker</TableHead>
-                <TableHead>Requests</TableHead>
-                <TableHead>Errors</TableHead>
-                <TableHead>RPS</TableHead>
-                <TableHead>p50</TableHead>
-                <TableHead>p95</TableHead>
-                <TableHead>p99</TableHead>
-                <TableHead>Status</TableHead>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className={TH_LABEL}>Worker</TableHead>
+                <TableHead className={`${TH_LABEL} text-right`}>Requests</TableHead>
+                <TableHead className={`${TH_LABEL} text-right`}>Errors</TableHead>
+                <TableHead className={`${TH_LABEL} text-right`}>RPS</TableHead>
+                <TableHead className={`${TH_LABEL} text-right`}>p50</TableHead>
+                <TableHead className={`${TH_LABEL} text-right`}>p95</TableHead>
+                <TableHead className={`${TH_LABEL} text-right`}>p99</TableHead>
+                <TableHead className={TH_LABEL}>Status</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {(snap.sub_jobs ?? []).map((sj) => (
                 <TableRow key={sj.job_id}>
-                  <TableCell className="font-mono text-xs">
+                  <TableCell className="font-mono text-xs text-muted-foreground">
                     {sj.job_id.slice(0, 8)}
                   </TableCell>
-                  <TableCell>{sj.requests}</TableCell>
-                  <TableCell>{sj.errors}</TableCell>
-                  <TableCell>{sj.rps.toFixed(1)}</TableCell>
-                  <TableCell>{sj.p50_ms}ms</TableCell>
-                  <TableCell>{sj.p95_ms}ms</TableCell>
-                  <TableCell>{sj.p99_ms}ms</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {sj.requests.toLocaleString()}
+                  </TableCell>
+                  <TableCell
+                    className={`text-right tabular-nums ${sj.errors > 0 ? "text-destructive" : ""}`}
+                  >
+                    {sj.errors.toLocaleString()}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">{sj.rps.toFixed(1)}</TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">
+                    {sj.p50_ms}ms
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">
+                    {sj.p95_ms}ms
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">
+                    {sj.p99_ms}ms
+                  </TableCell>
                   <TableCell>
-                    {sj.circuit_broken ? (
-                      <span className="text-amber-600 dark:text-amber-400">
-                        circuit-broken
-                      </span>
-                    ) : sj.done ? (
-                      "done"
-                    ) : (
-                      "running"
-                    )}
+                    <StatusDot status={testStatus(sj.done, sj.circuit_broken)} />
                   </TableCell>
                 </TableRow>
               ))}
@@ -513,24 +522,5 @@ function StatusBadge({
   done: boolean;
   circuitBroken: boolean;
 }) {
-  if (circuitBroken) {
-    return (
-      <Badge className="bg-amber-500/15 text-amber-700 dark:text-amber-400">
-        Circuit-broken
-      </Badge>
-    );
-  }
-  if (done) {
-    return (
-      <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-400">
-        Done
-      </Badge>
-    );
-  }
-  return (
-    <Badge className="gap-1.5 bg-primary/10 text-primary">
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
-      Running
-    </Badge>
-  );
+  return <StatusDot status={testStatus(done, circuitBroken)} size="md" />;
 }
