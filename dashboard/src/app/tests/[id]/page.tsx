@@ -8,6 +8,7 @@ import {
   TestSnapshot,
   badgeUrl,
   getTest,
+  getTestTrend,
   getToken,
   shareTest,
   testLiveWsUrl,
@@ -67,6 +68,7 @@ export default function TestPage({
   // useSearchParams — that hook needs a Suspense boundary the moment it's
   // used, and a one-time read on mount doesn't need it.
   const [capacityWarning, setCapacityWarning] = useState<string | null>(null);
+  const [trend, setTrend] = useState<TestSnapshot[] | null>(null);
 
   useEffect(() => {
     // window doesn't exist during server rendering, so this can only be
@@ -112,6 +114,21 @@ export default function TestPage({
       socket.close();
     };
   }, [id, router]);
+
+  useEffect(() => {
+    if (!snap?.done) return;
+    let cancelled = false;
+    // Requires Postgres (test history) — 501s harmlessly if it's not
+    // configured on this coordinator, same as the trend endpoint itself
+    // reports. No trend section shows up in that case, which is the
+    // right degradation: nothing to compare against yet either way.
+    getTestTrend(snap.url)
+      .then((series) => !cancelled && setTrend(series))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [snap?.done, snap?.url]);
 
   async function handleShare() {
     setShareError(null);
@@ -328,6 +345,54 @@ export default function TestPage({
           </Table>
         </CardContent>
       </Card>
+
+      {trend && trend.length >= 2 && (
+        <div className="mt-8">
+          <h2 className="mb-1 text-lg font-semibold tracking-tight">
+            Trend for this target
+          </h2>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Your last {trend.length} runs against this exact URL, oldest to
+            newest — a rising RPS line or a falling error-rate line means
+            it&apos;s actually getting better, not just this one run.
+          </p>
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle>Combined RPS across runs</CardTitle>
+                <CardDescription>
+                  Each point is one finished test&apos;s final combined RPS.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <LineChart
+                  points={trend.map((t) => t.combined_rps)}
+                  formatValue={(v) => v.toFixed(1)}
+                />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Error rate across runs</CardTitle>
+                <CardDescription>
+                  Each point is one finished test&apos;s overall error rate.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <LineChart
+                  points={trend.map((t) =>
+                    t.total_requests > 0
+                      ? (t.total_errors / t.total_requests) * 100
+                      : 0,
+                  )}
+                  color="var(--destructive)"
+                  formatValue={(v) => `${v.toFixed(1)}%`}
+                />
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      )}
 
       {snap.done && (
         <div className="mt-6 space-y-3 rounded-xl border bg-muted/50 p-4">

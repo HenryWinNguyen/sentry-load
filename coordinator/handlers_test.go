@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -85,6 +86,10 @@ func (f *fakeHistoryStore) Save(_ context.Context, snap TestSnapshot, ownerID st
 	if f.err != nil {
 		return f.err
 	}
+	if snap.FinishedAt == nil {
+		now := time.Now()
+		snap.FinishedAt = &now
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.byID[snap.TestID] = snap
@@ -117,6 +122,31 @@ func (f *fakeHistoryStore) List(_ context.Context, ownerID string, limit int) ([
 			out = append(out, snap)
 		}
 	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (f *fakeHistoryStore) ListByURL(_ context.Context, ownerID, url string, limit int) ([]TestSnapshot, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []TestSnapshot
+	for testID, snap := range f.byID {
+		if f.owner[testID] == ownerID && snap.URL == url {
+			out = append(out, snap)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		it, jt := out[i].FinishedAt, out[j].FinishedAt
+		if it == nil || jt == nil {
+			return false
+		}
+		return it.Before(*jt)
+	})
 	if len(out) > limit {
 		out = out[:limit]
 	}
@@ -980,6 +1010,62 @@ func TestHandleListTestsReturnsOwnersHistory(t *testing.T) {
 	}
 }
 
+func TestHandleTestTrendWithoutHistoryConfigured(t *testing.T) {
+	server := newTestServer(t, &fakeEnqueuer{}, fakeResolver{}, http.DefaultClient)
+	token := server.login(t)
+
+	resp := authedRequest(t, http.MethodGet, server.URL+"/tests/trend?url=http://allowed.example.com/fast", token, nil)
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("got status %d, want 501 (Postgres not configured)", resp.StatusCode)
+	}
+}
+
+func TestHandleTestTrendRequiresURL(t *testing.T) {
+	server := newTestServerWithHistory(t, &fakeEnqueuer{})
+	token := server.login(t)
+
+	resp := authedRequest(t, http.MethodGet, server.URL+"/tests/trend", token, nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestHandleTestTrendReturnsOwnersSeriesForThatURLOnly proves the trend
+// endpoint filters correctly on three axes at once: only the caller's own
+// tests, only tests against the exact URL asked about, and returned
+// oldest-first (chart-ready) rather than newest-first like /tests.
+func TestHandleTestTrendReturnsOwnersSeriesForThatURLOnly(t *testing.T) {
+	server := newTestServerWithHistory(t, &fakeEnqueuer{})
+	token := server.login(t)
+	user, _ := server.users.FindOrCreate(1, "henry")
+
+	older := time.Now().Add(-time.Hour)
+	newer := time.Now()
+	server.history.byID["run-1"] = TestSnapshot{TestID: "run-1", URL: "http://allowed.example.com/fast", Done: true, CombinedRPS: 100, FinishedAt: &older}
+	server.history.owner["run-1"] = user.ID
+	server.history.byID["run-2"] = TestSnapshot{TestID: "run-2", URL: "http://allowed.example.com/fast", Done: true, CombinedRPS: 200, FinishedAt: &newer}
+	server.history.owner["run-2"] = user.ID
+	// Different URL — must not appear in the /fast trend.
+	server.history.byID["run-3"] = TestSnapshot{TestID: "run-3", URL: "http://allowed.example.com/slow", Done: true, CombinedRPS: 5}
+	server.history.owner["run-3"] = user.ID
+	// Same URL, different owner — must not appear either.
+	server.history.byID["run-4"] = TestSnapshot{TestID: "run-4", URL: "http://allowed.example.com/fast", Done: true, CombinedRPS: 999}
+	server.history.owner["run-4"] = "someone-else"
+
+	resp := authedRequest(t, http.MethodGet, server.URL+"/tests/trend?url=http://allowed.example.com/fast", token, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want 200", resp.StatusCode)
+	}
+	var got []TestSnapshot
+	json.NewDecoder(resp.Body).Decode(&got)
+	if len(got) != 2 {
+		t.Fatalf("got %d tests, want 2 (run-1, run-2 only)", len(got))
+	}
+	if got[0].TestID != "run-1" || got[1].TestID != "run-2" {
+		t.Fatalf("got order %q, %q — want run-1 then run-2 (oldest first)", got[0].TestID, got[1].TestID)
+	}
+}
+
 func TestHandleGetTestFallsBackToHistory(t *testing.T) {
 	server := newTestServerWithHistory(t, &fakeEnqueuer{})
 	token := server.login(t)
@@ -1119,5 +1205,73 @@ func TestHandlePublicReportServesSharedTestWithNoAuth(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&got)
 	if got.TotalRequests != 99 {
 		t.Fatalf("got total_requests %d, want 99", got.TotalRequests)
+	}
+}
+
+func TestHandleGetWebhookDefaultsToEmpty(t *testing.T) {
+	server := newTestServer(t, &fakeEnqueuer{}, fakeResolver{}, http.DefaultClient)
+	token := server.login(t)
+
+	resp := authedRequest(t, http.MethodGet, server.URL+"/me/webhook", token, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want 200", resp.StatusCode)
+	}
+	var got webhookSettingsResponse
+	json.NewDecoder(resp.Body).Decode(&got)
+	if got.WebhookURL != "" {
+		t.Fatalf("got webhook_url %q, want empty for a user who never set one", got.WebhookURL)
+	}
+}
+
+func TestHandleSetWebhookRoundTrip(t *testing.T) {
+	server := newTestServer(t, &fakeEnqueuer{}, fakeResolver{}, http.DefaultClient)
+	token := server.login(t)
+
+	setResp := authedRequest(t, http.MethodPut, server.URL+"/me/webhook", token, setWebhookRequest{WebhookURL: "https://discord.com/api/webhooks/123/abc"})
+	if setResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT: got status %d, want 200", setResp.StatusCode)
+	}
+
+	getResp := authedRequest(t, http.MethodGet, server.URL+"/me/webhook", token, nil)
+	var got webhookSettingsResponse
+	json.NewDecoder(getResp.Body).Decode(&got)
+	if got.WebhookURL != "https://discord.com/api/webhooks/123/abc" {
+		t.Fatalf("got webhook_url %q after setting it", got.WebhookURL)
+	}
+
+	// Clearing with an empty string must succeed and actually clear it.
+	clearResp := authedRequest(t, http.MethodPut, server.URL+"/me/webhook", token, setWebhookRequest{WebhookURL: ""})
+	if clearResp.StatusCode != http.StatusOK {
+		t.Fatalf("clearing: got status %d, want 200", clearResp.StatusCode)
+	}
+	getResp2 := authedRequest(t, http.MethodGet, server.URL+"/me/webhook", token, nil)
+	var got2 webhookSettingsResponse
+	json.NewDecoder(getResp2.Body).Decode(&got2)
+	if got2.WebhookURL != "" {
+		t.Fatalf("got webhook_url %q after clearing, want empty", got2.WebhookURL)
+	}
+}
+
+// TestHandleSetWebhookRejectsSSRFVectors mirrors
+// TestHandleCreateDomainChallengeRejectsSSRFVectors — a webhook URL is the
+// same class of risk as a domain-verification target: the coordinator
+// will later make an outbound request to it unattended.
+func TestHandleSetWebhookRejectsSSRFVectors(t *testing.T) {
+	server := newTestServer(t, &fakeEnqueuer{}, fakeResolver{}, http.DefaultClient)
+	token := server.login(t)
+
+	for _, webhookURL := range []string{
+		"http://discord.com/api/webhooks/123/abc", // not https
+		"https://127.0.0.1/webhook",
+		"https://169.254.169.254/webhook",
+		"https://localhost/webhook",
+		"not-a-url",
+	} {
+		t.Run(webhookURL, func(t *testing.T) {
+			resp := authedRequest(t, http.MethodPut, server.URL+"/me/webhook", token, setWebhookRequest{WebhookURL: webhookURL})
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("webhook_url %q: got status %d, want 400", webhookURL, resp.StatusCode)
+			}
+		})
 	}
 }

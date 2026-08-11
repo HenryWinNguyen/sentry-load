@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -17,6 +18,11 @@ type testHistoryStore interface {
 	Save(ctx context.Context, snap TestSnapshot, ownerID string) error
 	Get(ctx context.Context, testID, ownerID string) (TestSnapshot, bool, error)
 	List(ctx context.Context, ownerID string, limit int) ([]TestSnapshot, error)
+
+	// ListByURL returns ownerID's past finished tests against exactly url,
+	// oldest first — chart-ready order for the per-target trend view,
+	// unlike List's newest-first order for a plain history list.
+	ListByURL(ctx context.Context, ownerID, url string, limit int) ([]TestSnapshot, error)
 
 	// EnsureShareToken returns testID's public share token, scoped to
 	// ownerID the same way Get is — generating one on first call and
@@ -79,6 +85,7 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		);
 		ALTER TABLE tests ADD COLUMN IF NOT EXISTS share_token TEXT;
 		CREATE INDEX IF NOT EXISTS idx_tests_owner ON tests (owner_id, finished_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_tests_owner_url ON tests (owner_id, url, finished_at);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_tests_share_token ON tests (share_token) WHERE share_token IS NOT NULL;
 
 		CREATE TABLE IF NOT EXISTS sub_jobs (
@@ -237,21 +244,41 @@ func (h *postgresHistory) loadSubJobs(ctx context.Context, testID string) ([]Sub
 // List returns ownerID's most recent tests, newest first, capped at limit.
 func (h *postgresHistory) List(ctx context.Context, ownerID string, limit int) ([]TestSnapshot, error) {
 	rows, err := h.pool.Query(ctx, `
-		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken
+		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken, finished_at
 		FROM tests WHERE owner_id = $1 ORDER BY finished_at DESC LIMIT $2
 	`, ownerID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("querying test history for %s: %w", ownerID, err)
 	}
 	defer rows.Close()
+	return scanTestRows(rows)
+}
 
+// ListByURL returns ownerID's past tests against exactly url, oldest
+// first — feeds the per-target trend view, which wants a chronological
+// series to plot rather than a "most recent N" list.
+func (h *postgresHistory) ListByURL(ctx context.Context, ownerID, url string, limit int) ([]TestSnapshot, error) {
+	rows, err := h.pool.Query(ctx, `
+		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken, finished_at
+		FROM tests WHERE owner_id = $1 AND url = $2 ORDER BY finished_at ASC LIMIT $3
+	`, ownerID, url, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying trend for %s: %w", url, err)
+	}
+	defer rows.Close()
+	return scanTestRows(rows)
+}
+
+func scanTestRows(rows pgx.Rows) ([]TestSnapshot, error) {
 	var snaps []TestSnapshot
 	for rows.Next() {
 		var snap TestSnapshot
-		if err := rows.Scan(&snap.TestID, &snap.URL, &snap.TotalRequests, &snap.TotalErrors, &snap.CombinedRPS, &snap.CircuitBroken); err != nil {
+		var finishedAt time.Time
+		if err := rows.Scan(&snap.TestID, &snap.URL, &snap.TotalRequests, &snap.TotalErrors, &snap.CombinedRPS, &snap.CircuitBroken, &finishedAt); err != nil {
 			return nil, fmt.Errorf("scanning test row: %w", err)
 		}
 		snap.Done = true
+		snap.FinishedAt = &finishedAt
 		snaps = append(snaps, snap)
 	}
 	return snaps, rows.Err()

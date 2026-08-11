@@ -10,6 +10,11 @@ type User struct {
 	ID          string
 	GitHubID    int64
 	GitHubLogin string
+	// WebhookURL, if set, is a Discord/Slack incoming-webhook URL the
+	// coordinator POSTs a short summary to whenever one of this user's
+	// tests finishes. In-memory like everything else on User — lost on
+	// restart, same tradeoff as sessions.
+	WebhookURL string
 }
 
 // UserStore tracks known users and issued session tokens in memory. Same
@@ -79,4 +84,28 @@ func (s *UserStore) UserForSession(token string) (*User, bool) {
 	}
 	u, ok := s.byID[userID]
 	return u, ok
+}
+
+// GetByID looks up a user by their stable ID, independent of any session
+// token — needed by the results watcher to resolve a finished test's
+// owner for webhook delivery, where there's no HTTP request/session in
+// play at all.
+func (s *UserStore) GetByID(userID string) (*User, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.byID[userID]
+	return u, ok
+}
+
+// SetWebhookURL updates userID's configured chat webhook. An empty string
+// clears it. Returns false if userID doesn't exist.
+func (s *UserStore) SetWebhookURL(userID, webhookURL string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.byID[userID]
+	if !ok {
+		return false
+	}
+	u.WebhookURL = webhookURL
+	return true
 }

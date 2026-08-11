@@ -46,6 +46,14 @@ export default function Nav() {
           >
             Domains
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            nativeButton={false}
+            render={<Link href="/settings" />}
+          >
+            Settings
+          </Button>
           <Button variant="ghost" size="sm" onClick={logout}>
             Log out
           </Button>

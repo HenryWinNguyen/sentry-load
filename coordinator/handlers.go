@@ -449,6 +449,42 @@ func (s *apiServer) handleListTests(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, snaps)
 }
 
+const trendListLimit = 20
+
+// handleTestTrend returns the caller's past finished tests against a
+// single target URL, oldest first — the data behind the per-target trend
+// view (has this URL gotten faster or slower across recent tests). Same
+// Postgres requirement as handleListTests; there's no in-memory
+// equivalent since only the currently-live tests exist outside Postgres.
+func (s *apiServer) handleTestTrend(w http.ResponseWriter, r *http.Request) {
+	user, ok := userFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if s.history == nil {
+		writeError(w, http.StatusNotImplemented, "test history is not available (Postgres not configured on this server)")
+		return
+	}
+
+	url := r.URL.Query().Get("url")
+	if url == "" {
+		writeError(w, http.StatusBadRequest, "url query parameter is required")
+		return
+	}
+
+	snaps, err := s.history.ListByURL(r.Context(), user.ID, url, trendListLimit)
+	if err != nil {
+		log.Printf("failed to load trend for %s (%s): %v", user.ID, url, err)
+		writeError(w, http.StatusInternalServerError, "failed to load trend")
+		return
+	}
+	if snaps == nil {
+		snaps = []TestSnapshot{}
+	}
+	writeJSON(w, http.StatusOK, snaps)
+}
+
 type shareTestResponse struct {
 	ShareToken string `json:"share_token"`
 	ShareURL   string `json:"share_url"`
@@ -510,4 +546,52 @@ func (s *apiServer) handlePublicReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, snap)
+}
+
+type webhookSettingsResponse struct {
+	WebhookURL string `json:"webhook_url"`
+}
+
+// handleGetWebhook returns the caller's currently configured chat webhook
+// URL (empty string if none set) — lets a settings page load its current
+// value without the caller having to remember it separately.
+func (s *apiServer) handleGetWebhook(w http.ResponseWriter, r *http.Request) {
+	user, ok := userFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	writeJSON(w, http.StatusOK, webhookSettingsResponse{WebhookURL: user.WebhookURL})
+}
+
+type setWebhookRequest struct {
+	WebhookURL string `json:"webhook_url"`
+}
+
+// handleSetWebhook updates the caller's chat webhook (a Discord or Slack
+// incoming-webhook URL) — the coordinator POSTs a short summary to it
+// whenever one of their tests finishes. An empty string clears it.
+//
+// Validated the same way domain verification's target is (isValidDomainName)
+// — this is the same class of risk as that SSRF gap: a user-supplied URL
+// the coordinator itself will later make an outbound request to, so it
+// can't be trusted to be a public host without checking.
+func (s *apiServer) handleSetWebhook(w http.ResponseWriter, r *http.Request) {
+	user, ok := userFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	var req setWebhookRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	webhookURL := strings.TrimSpace(req.WebhookURL)
+	if webhookURL != "" && !isValidWebhookURL(webhookURL) {
+		writeError(w, http.StatusBadRequest, "webhook_url must be an https:// URL to a public host, or empty to clear it")
+		return
+	}
+	s.users.SetWebhookURL(user.ID, webhookURL)
+	writeJSON(w, http.StatusOK, webhookSettingsResponse{WebhookURL: webhookURL})
 }

@@ -67,7 +67,14 @@ func NewServer(cfg ServerConfig) http.Handler {
 	mux.HandleFunc("POST /domains/{domain}/verify", s.requireAuth(s.handleVerifyDomain))
 	mux.HandleFunc("POST /tests", s.requireAuth(s.handleCreateTest))
 	mux.HandleFunc("GET /tests", s.requireAuth(s.handleListTests))
+	// Registered before /tests/{id} — Go's ServeMux prefers the more
+	// specific literal segment over the wildcard for the same position,
+	// but keeping the literal route physically first here too for anyone
+	// reading top-to-bottom rather than relying purely on that.
+	mux.HandleFunc("GET /tests/trend", s.requireAuth(s.handleTestTrend))
 	mux.HandleFunc("GET /tests/{id}", s.requireAuth(s.handleGetTest))
+	mux.HandleFunc("GET /me/webhook", s.requireAuth(s.handleGetWebhook))
+	mux.HandleFunc("PUT /me/webhook", s.requireAuth(s.handleSetWebhook))
 	mux.HandleFunc("POST /tests/{id}/share", s.requireAuth(s.handleShareTest))
 	// Deliberately not wrapped in requireAuth — a share link's whole point
 	// is that anyone holding it can view the report without logging in.
