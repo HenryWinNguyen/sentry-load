@@ -67,16 +67,38 @@ func TestDomainStoreReissueOverwritesPreviousChallenge(t *testing.T) {
 func TestDomainStoreVerifiedRoundTrip(t *testing.T) {
 	s := NewDomainStore()
 
-	if s.IsVerified("example.com") {
+	if s.IsVerified("example.com", "user-a") {
 		t.Fatal("expected domain to be unverified before MarkVerified")
 	}
 
-	s.MarkVerified("example.com")
+	s.MarkVerified("example.com", "user-a")
 
-	if !s.IsVerified("example.com") {
-		t.Fatal("expected domain to be verified after MarkVerified")
+	if !s.IsVerified("example.com", "user-a") {
+		t.Fatal("expected domain to be verified for the user who verified it")
 	}
-	if s.IsVerified("other.com") {
+	if s.IsVerified("other.com", "user-a") {
 		t.Fatal("expected an unrelated domain to remain unverified")
+	}
+}
+
+// TestDomainStoreVerificationNotSharedAcrossUsers guards against the
+// exact bug found in review: one user proving ownership of a domain must
+// not authorize a *different* user to target that same domain — that
+// would let anyone load-test any domain someone else already verified,
+// which is precisely the DDoS-as-a-service scenario the verification
+// requirement exists to prevent (see CLAUDE.md/SCOPE.md's non-negotiable
+// safety line).
+func TestDomainStoreVerificationNotSharedAcrossUsers(t *testing.T) {
+	s := NewDomainStore()
+
+	s.MarkVerified("example.com", "user-a")
+
+	if s.IsVerified("example.com", "user-b") {
+		t.Fatal("user-b must not be considered verified for a domain only user-a verified")
+	}
+
+	s.MarkVerified("example.com", "user-b")
+	if !s.IsVerified("example.com", "user-a") || !s.IsVerified("example.com", "user-b") {
+		t.Fatal("expected both users to be independently verified for the same domain")
 	}
 }

@@ -183,6 +183,10 @@ func (s *apiServer) handleCreateDomainChallenge(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, "domain is required")
 		return
 	}
+	if !isValidDomainName(domain) {
+		writeError(w, http.StatusBadRequest, "domain must be a public hostname, not an IP address or a local/internal-looking name")
+		return
+	}
 
 	token, err := s.domains.IssueChallenge(domain)
 	if err != nil {
@@ -213,6 +217,12 @@ type verifyDomainResponse struct {
 // whichever proof method the caller picked, and marks the domain verified
 // on success.
 func (s *apiServer) handleVerifyDomain(w http.ResponseWriter, r *http.Request) {
+	user, ok := userFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
 	domain := r.PathValue("domain")
 	if domain == "" {
 		writeError(w, http.StatusBadRequest, "domain is required")
@@ -253,7 +263,7 @@ func (s *apiServer) handleVerifyDomain(w http.ResponseWriter, r *http.Request) {
 		verified = false
 	}
 	if verified {
-		s.domains.MarkVerified(domain)
+		s.domains.MarkVerified(domain, user.ID)
 	}
 
 	writeJSON(w, http.StatusOK, verifyDomainResponse{Domain: domain, Verified: verified})
@@ -304,7 +314,7 @@ func (s *apiServer) handleCreateTest(w http.ResponseWriter, r *http.Request) {
 	}
 	host := parsed.Hostname()
 
-	if !s.allowlist[host] && !s.domains.IsVerified(host) {
+	if !s.allowlist[host] && !s.domains.IsVerified(host, user.ID) {
 		writeError(w, http.StatusForbidden, fmt.Sprintf("domain %q is not verified; POST /domains to start verification", host))
 		return
 	}
