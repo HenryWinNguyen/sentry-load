@@ -231,7 +231,15 @@ end to end, deployed on real (free-tier) infrastructure, not just localhost.
 - **M13** — Prometheus + Grafana on the worker fleet.
 - **M14** — Preset test shapes (Quick Check / Launch Day / Class Demo).
 - **M15** — Shareable badge + GitHub Action integration.
-- **M16 (stretch)** — Kubernetes-based worker orchestration/autoscaling.
+- ~~**M16 (stretch)** — Kubernetes-based worker orchestration/autoscaling.~~
+  **Decided out of scope (2026-08-10).** Cuts against the project's own
+  positioning: the pitch is free distributed testing with no DevOps/
+  subscription pain, vs. k6/JMeter. A real K8s cluster's control plane
+  isn't free-tier-friendly, and a single-node k3s crammed onto the
+  existing 954MB Oracle VM wouldn't demonstrate genuine orchestration or
+  autoscaling — it'd just be complexity for a checkbox. Effort redirected
+  instead toward making the actual multi-region distributed story true in
+  the live product (see `docs/PROGRESS.md` 2026-08-10).
 
 ## Open questions for next session
 

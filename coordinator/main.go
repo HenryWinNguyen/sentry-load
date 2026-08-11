@@ -27,7 +27,7 @@ func main() {
 		addr = "localhost:6379"
 	}
 
-	rdb := redis.NewClient(&redis.Options{Addr: addr})
+	rdb := redis.NewClient(&redis.Options{Addr: addr, Password: os.Getenv("REDIS_PASSWORD")})
 	pingCtx, cancelPing := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := rdb.Ping(pingCtx).Err(); err != nil {
 		log.Fatalf("could not reach redis at %s: %v", addr, err)
