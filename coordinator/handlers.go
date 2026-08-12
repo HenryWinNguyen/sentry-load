@@ -525,6 +525,82 @@ func (s *apiServer) handleShareTest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type setLabelRequest struct {
+	Label string `json:"label"`
+}
+
+type setLabelResponse struct {
+	Label string `json:"label"`
+}
+
+// handleSetTestLabel sets or clears a finished test's display name, owned
+// by the caller — personal history organization (delete/label), not a
+// shared/team feature (SCOPE.md keeps team/org accounts permanently out
+// of scope). An empty label clears it back to just showing the URL.
+func (s *apiServer) handleSetTestLabel(w http.ResponseWriter, r *http.Request) {
+	user, ok := userFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if s.history == nil {
+		writeError(w, http.StatusNotImplemented, "test history is not available (Postgres not configured on this server)")
+		return
+	}
+
+	var req setLabelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	id := r.PathValue("id")
+	label := strings.TrimSpace(req.Label)
+	ok, err := s.history.SetLabel(r.Context(), id, user.ID, label)
+	if err != nil {
+		log.Printf("failed to set label for %s: %v", id, err)
+		writeError(w, http.StatusInternalServerError, "failed to set label")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "unknown test id")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, setLabelResponse{Label: label})
+}
+
+// handleDeleteTest permanently removes a finished test from the caller's
+// own history — personal cleanup, scoped to the owner exactly like every
+// other test operation. Live in-flight tests aren't reachable here at all
+// (they're not in Postgres yet), so this only ever affects finished,
+// already-persisted history.
+func (s *apiServer) handleDeleteTest(w http.ResponseWriter, r *http.Request) {
+	user, ok := userFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if s.history == nil {
+		writeError(w, http.StatusNotImplemented, "test history is not available (Postgres not configured on this server)")
+		return
+	}
+
+	id := r.PathValue("id")
+	ok, err := s.history.Delete(r.Context(), id, user.ID)
+	if err != nil {
+		log.Printf("failed to delete test %s: %v", id, err)
+		writeError(w, http.StatusInternalServerError, "failed to delete test")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "unknown test id")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handlePublicReport serves a shared test's results with no auth — holding
 // the link is the entire authorization model, by design (M11).
 func (s *apiServer) handlePublicReport(w http.ResponseWriter, r *http.Request) {

@@ -7,9 +7,11 @@ import {
   ApiError,
   TestSnapshot,
   badgeUrl,
+  deleteTest,
   getTest,
   getTestTrend,
   getToken,
+  setTestLabel,
   shareTest,
   testLiveWsUrl,
 } from "@/lib/api";
@@ -34,6 +36,7 @@ import BarChart from "@/components/BarChart";
 import AnimatedNumber from "@/components/AnimatedNumber";
 import StatusDot, { testStatus } from "@/components/StatusDot";
 import InfoTooltip from "@/components/InfoTooltip";
+import { Pencil, Trash2 } from "lucide-react";
 
 // Cumulative totals climb every tick regardless of what's actually
 // happening right now, which buries spikes — a jump from 0 to 20 errors
@@ -74,6 +77,10 @@ export default function TestPage({
   // used, and a one-time read on mount doesn't need it.
   const [capacityWarning, setCapacityWarning] = useState<string | null>(null);
   const [trend, setTrend] = useState<TestSnapshot[] | null>(null);
+  const [editingLabel, setEditingLabel] = useState(false);
+  const [labelDraft, setLabelDraft] = useState("");
+  const [labelBusy, setLabelBusy] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   useEffect(() => {
     // window doesn't exist during server rendering, so this can only be
@@ -134,6 +141,28 @@ export default function TestPage({
       cancelled = true;
     };
   }, [snap?.done, snap?.url]);
+
+  async function saveLabel() {
+    setLabelBusy(true);
+    try {
+      const { label } = await setTestLabel(id, labelDraft.trim());
+      setSnap((cur) => (cur ? { ...cur, label } : cur));
+      setEditingLabel(false);
+    } finally {
+      setLabelBusy(false);
+    }
+  }
+
+  async function handleDeleteTest() {
+    if (!window.confirm("Delete this test? This can't be undone.")) return;
+    setDeleteBusy(true);
+    try {
+      await deleteTest(id);
+      router.push("/tests");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
 
   async function handleShare() {
     setShareError(null);
@@ -206,15 +235,73 @@ export default function TestPage({
       </Link>
 
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="break-all text-2xl font-semibold tracking-tight">
-            {snap.url}
-          </h1>
-          <p className="mt-1 font-mono text-xs text-muted-foreground">
-            {snap.test_id}
-          </p>
+        {editingLabel ? (
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <Input
+              autoFocus
+              value={labelDraft}
+              onChange={(e) => setLabelDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") saveLabel();
+                if (e.key === "Escape") setEditingLabel(false);
+              }}
+              placeholder={snap.url}
+              className="text-lg"
+            />
+            <Button size="sm" onClick={saveLabel} disabled={labelBusy}>
+              Save
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setEditingLabel(false)}
+              disabled={labelBusy}
+            >
+              Cancel
+            </Button>
+          </div>
+        ) : (
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="break-all text-2xl font-semibold tracking-tight">
+                {snap.label || snap.url}
+              </h1>
+              {snap.done && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLabelDraft(snap.label ?? "");
+                    setEditingLabel(true);
+                  }}
+                  aria-label="Rename"
+                  className="cursor-pointer shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <Pencil className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            {snap.label && (
+              <p className="break-all text-sm text-muted-foreground">{snap.url}</p>
+            )}
+            <p className="mt-1 font-mono text-xs text-muted-foreground">
+              {snap.test_id}
+            </p>
+          </div>
+        )}
+        <div className="flex shrink-0 items-center gap-2">
+          <StatusBadge done={snap.done} circuitBroken={snap.circuit_broken} />
+          {snap.done && !editingLabel && (
+            <button
+              type="button"
+              onClick={handleDeleteTest}
+              disabled={deleteBusy}
+              aria-label="Delete test"
+              className="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
         </div>
-        <StatusBadge done={snap.done} circuitBroken={snap.circuit_broken} />
       </div>
 
       {capacityWarning && (

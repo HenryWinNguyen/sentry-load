@@ -208,8 +208,13 @@ type SubJobSnapshot struct {
 // (verified live in M6: workers on different infra had genuinely different
 // latency distributions).
 type TestSnapshot struct {
-	TestID        string           `json:"test_id"`
-	URL           string           `json:"url"`
+	TestID string `json:"test_id"`
+	URL    string `json:"url"`
+	// Label is a user-set display name, empty until someone sets one via
+	// PUT /tests/{id}/label — only ever populated from Postgres history,
+	// same as FinishedAt, since a live in-flight test in TestStore has no
+	// concept of a label yet.
+	Label         string           `json:"label,omitempty"`
 	Done          bool             `json:"done"`
 	CircuitBroken bool             `json:"circuit_broken"` // true if any sub-job aborted early (M9)
 	TotalRequests int              `json:"total_requests"`

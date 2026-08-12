@@ -73,6 +73,8 @@ func NewServer(cfg ServerConfig) http.Handler {
 	// reading top-to-bottom rather than relying purely on that.
 	mux.HandleFunc("GET /tests/trend", s.requireAuth(s.handleTestTrend))
 	mux.HandleFunc("GET /tests/{id}", s.requireAuth(s.handleGetTest))
+	mux.HandleFunc("DELETE /tests/{id}", s.requireAuth(s.handleDeleteTest))
+	mux.HandleFunc("PUT /tests/{id}/label", s.requireAuth(s.handleSetTestLabel))
 	mux.HandleFunc("GET /me/webhook", s.requireAuth(s.handleGetWebhook))
 	mux.HandleFunc("PUT /me/webhook", s.requireAuth(s.handleSetWebhook))
 	mux.HandleFunc("POST /tests/{id}/share", s.requireAuth(s.handleShareTest))

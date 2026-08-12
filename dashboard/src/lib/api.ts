@@ -102,6 +102,9 @@ export interface TestSnapshot {
   // Only set on snapshots that came from test history (list/trend), not
   // a live in-flight test.
   finished_at?: string;
+  // User-set display name, empty until set via setTestLabel — personal
+  // history organization, not shared/team labeling.
+  label?: string;
 }
 
 export function listTests(): Promise<TestSnapshot[]> {
@@ -212,5 +215,21 @@ export function setWebhookSettings(webhookUrl: string): Promise<WebhookSettings>
   return request<WebhookSettings>("/me/webhook", {
     method: "PUT",
     body: JSON.stringify({ webhook_url: webhookUrl }),
+  });
+}
+
+// deleteTest permanently removes a finished test from the caller's own
+// history. Personal cleanup only — there's no shared/team history to
+// delete from.
+export function deleteTest(id: string): Promise<void> {
+  return request<void>(`/tests/${id}`, { method: "DELETE" });
+}
+
+// setTestLabel sets or clears a test's display name — an empty string
+// clears it back to just showing the URL.
+export function setTestLabel(id: string, label: string): Promise<{ label: string }> {
+  return request(`/tests/${id}/label`, {
+    method: "PUT",
+    body: JSON.stringify({ label }),
   });
 }
