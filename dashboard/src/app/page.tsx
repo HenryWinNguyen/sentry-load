@@ -13,19 +13,19 @@ import { Card, CardContent } from "@/components/ui/card";
 const WHY = [
   {
     title: "Actually distributed, actually free",
-    body: "Real workers on real machines across providers/regions — not a single-box free tier with distributed testing paywalled behind a subscription.",
+    body: "Real workers on real machines across providers and regions. Not a single-box free tier with distributed testing paywalled behind a subscription",
   },
   {
     title: "No scripting, no config sprawl",
-    body: "Verify a target, pick a preset (or set your own VUs/duration/ramp), go. No test-scripting DSL to learn, no manually wiring up nodes.",
+    body: "Verify a target, pick a preset (or set your own VUs/duration/ramp), go. No test-scripting DSL to learn, no manually wiring up nodes",
   },
   {
     title: "Honest about its own limits",
-    body: "The coordinator checks live fleet capacity before accepting a test — it refuses or clamps with a warning instead of silently under-delivering.",
+    body: "The coordinator checks live fleet capacity before accepting a test. It refuses or clamps with a warning instead of silently under-delivering",
   },
   {
     title: "Shareable by default",
-    body: "Every finished test gets a public report link and an embeddable badge — drop it in a README, or wire the GitHub Action into your PR checks.",
+    body: "Every finished test gets a public report link and an embeddable badge. Drop it in a README, or wire the GitHub Action into your PR checks",
   },
 ];
 
@@ -44,8 +44,8 @@ export default function Home() {
         </h1>
         <p className="max-w-md text-muted-foreground">
           Load-test your own side project before it goes live. Verify a
-          target, pick a preset, watch RPS and latency stream in live — free,
-          across real distributed workers.
+          target, pick a preset, watch RPS and latency stream in live. Free,
+          across real distributed workers
         </p>
         <Button size="lg" nativeButton={false} render={<a href={loginUrl()} />}>
           Log in with GitHub

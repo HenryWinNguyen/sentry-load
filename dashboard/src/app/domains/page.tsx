@@ -66,8 +66,8 @@ export default function DomainsPage() {
       </h1>
       <p className="mb-6 text-sm text-muted-foreground">
         Proving you own a domain is what separates a load tester from a
-        DDoS-as-a-service tool — every target needs it, unless it&apos;s
-        already on the built-in allowlist (e.g. localhost).
+        DDoS-as-a-service tool. Every target needs it, unless it&apos;s
+        already on the built-in allowlist (e.g. localhost)
       </p>
 
       <form onSubmit={requestChallenge} className="mb-8 flex gap-2">
@@ -92,7 +92,7 @@ export default function DomainsPage() {
         <div className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>Option 1 — DNS TXT record</CardTitle>
+              <CardTitle>DNS TXT record</CardTitle>
               <CardDescription>
                 Add a TXT record at <code>{challenge.dns_record}</code> with
                 this value:
@@ -116,7 +116,7 @@ export default function DomainsPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Option 2 — well-known file</CardTitle>
+              <CardTitle>Well-known file</CardTitle>
               <CardDescription>Serve exactly this token at:</CardDescription>
             </CardHeader>
             <CardContent>
@@ -144,8 +144,8 @@ export default function DomainsPage() {
               }`}
             >
               {verified
-                ? "Verified — you can target this domain now."
-                : "Not verified yet. Set up the record/file and try again."}
+                ? "Verified. You can target this domain now"
+                : "Not verified yet. Set up the record/file and try again"}
             </p>
           )}
         </div>

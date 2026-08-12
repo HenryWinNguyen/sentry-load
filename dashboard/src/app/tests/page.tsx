@@ -15,15 +15,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
+import InfoTooltip from "@/components/InfoTooltip";
 
 // Presets tuned to indie-launch scale (SCOPE.md M14), not raw enterprise
-// configurability — just enough to get a first-timer to a sensible test
+// configurability, just enough to get a first-timer to a sensible test
 // without having to know what a VU or a ramp pattern is.
 const PRESETS = [
   {
     key: "quick-check",
     label: "Quick Check",
-    description: "60s, ~50 users — a fast sanity check before you ship.",
+    description: "60s, ~50 users. A fast sanity check before you ship",
     vus: "50",
     durationSeconds: "60",
     rampPattern: "steady" as const,
@@ -31,7 +32,7 @@ const PRESETS = [
   {
     key: "launch-day",
     label: "Launch Day",
-    description: "5 min ramp to 200 users — simulates a real traffic spike.",
+    description: "5 min ramp to 200 users. Simulates a real traffic spike",
     vus: "200",
     durationSeconds: "300",
     rampPattern: "ramp" as const,
@@ -39,7 +40,7 @@ const PRESETS = [
   {
     key: "class-demo",
     label: "Class Demo",
-    description: "2 min, steady moderate load — good for showing off live.",
+    description: "2 min, steady moderate load. Good for showing off live",
     vus: "30",
     durationSeconds: "120",
     rampPattern: "steady" as const,
@@ -50,12 +51,12 @@ const RAMP_PATTERNS = [
   {
     value: "steady" as const,
     label: "Steady",
-    description: "Full load from second one — good for a straightforward capacity check.",
+    description: "Full load from second one. Good for a straightforward capacity check",
   },
   {
     value: "ramp" as const,
     label: "Ramp up",
-    description: "Gradually builds from 0 to full load over the test — shows you where things start to break.",
+    description: "Gradually builds from 0 to full load over the test. Shows you where things start to break",
   },
 ];
 
@@ -66,7 +67,12 @@ export default function TestsPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const [url, setUrl] = useState("http://localhost:8081/fast");
+  // Deliberately empty, not pre-filled — a pre-filled example URL is easy
+  // to submit by accident without noticing (it happened live: a test
+  // silently ran against whichever worker's own localhost instead of the
+  // real target). Leaving it blank forces a conscious choice; the
+  // placeholder below still shows the expected shape.
+  const [url, setUrl] = useState("");
   // Kept as strings, not numbers — a controlled number input bound to a
   // number forces the field back to "0" the instant it's cleared (empty
   // string coerces to 0), which means you can never actually delete the
@@ -140,7 +146,7 @@ export default function TestsPage() {
       <h1 className="mb-1 text-2xl font-semibold tracking-tight">New test</h1>
       <p className="mb-6 text-sm text-muted-foreground">
         Configure a load test against your app. Everything here is
-        explained — no prior load-testing experience needed.
+        explained, no prior load-testing experience needed.
       </p>
 
       <Card>
@@ -181,7 +187,13 @@ export default function TestsPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="url">Target URL</Label>
+              <Label htmlFor="url" className="flex items-center gap-1.5">
+                Target URL
+                <InfoTooltip>
+                  The exact endpoint you want to load test. Your homepage,
+                  an API route, whatever you&apos;re worried about
+                </InfoTooltip>
+              </Label>
               <Input
                 id="url"
                 value={url}
@@ -189,15 +201,16 @@ export default function TestsPage() {
                 required
                 placeholder="https://your-app.com/"
               />
-              <p className="text-xs text-muted-foreground">
-                The exact endpoint you want to hammer with traffic — your
-                homepage, an API route, whatever you&apos;re worried about.
-              </p>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label htmlFor="vus">Concurrent users</Label>
+                <Label htmlFor="vus" className="flex items-center gap-1.5">
+                  Concurrent users
+                  <InfoTooltip>
+                    How many simulated visitors hit your app at once
+                  </InfoTooltip>
+                </Label>
                 <Input
                   id="vus"
                   type="number"
@@ -209,12 +222,12 @@ export default function TestsPage() {
                     setSelectedPreset(null);
                   }}
                 />
-                <p className="text-xs text-muted-foreground">
-                  How many simulated visitors hit your app at once.
-                </p>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="duration">Duration</Label>
+                <Label htmlFor="duration" className="flex items-center gap-1.5">
+                  Duration
+                  <InfoTooltip>How long the test runs</InfoTooltip>
+                </Label>
                 <div className="relative">
                   <Input
                     id="duration"
@@ -231,9 +244,6 @@ export default function TestsPage() {
                     sec
                   </span>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  How long the test runs.
-                </p>
               </div>
             </div>
 
@@ -270,7 +280,15 @@ export default function TestsPage() {
                 Advanced: multiple worker machines
               </summary>
               <div className="mt-3 space-y-1.5">
-                <Label htmlFor="workers">Worker machines</Label>
+                <Label htmlFor="workers" className="flex items-center gap-1.5">
+                  Worker machines
+                  <InfoTooltip>
+                    Splits the load across multiple worker machines running
+                    in parallel, for genuinely distributed load instead of
+                    one machine&apos;s worth. Leave at 1 unless you know you
+                    have more than one worker running
+                  </InfoTooltip>
+                </Label>
                 <Input
                   id="workers"
                   type="number"
@@ -279,12 +297,6 @@ export default function TestsPage() {
                   value={workerCount}
                   onChange={(e) => setWorkerCount(e.target.value)}
                 />
-                <p className="text-xs text-muted-foreground">
-                  Splits the load across multiple worker machines running in
-                  parallel, for genuinely distributed load instead of one
-                  machine&apos;s worth. Leave at 1 unless you know you have
-                  more than one worker running.
-                </p>
               </div>
             </details>
 
@@ -316,7 +328,7 @@ export default function TestsPage() {
       {!historyAvailable && (
         <p className="text-sm text-muted-foreground">
           Test history isn&apos;t available on this server (Postgres not
-          configured) — you can still run tests, just not browse past ones.
+          configured). You can still run tests, just not browse past ones
         </p>
       )}
       {historyAvailable && tests?.length === 0 && (
