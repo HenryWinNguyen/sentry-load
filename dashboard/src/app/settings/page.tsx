@@ -62,7 +62,7 @@ export default function SettingsPage() {
       <h1 className="mb-2 text-2xl font-semibold tracking-tight">Settings</h1>
       <p className="mb-6 text-sm text-muted-foreground">
         Get notified in Discord or Slack the moment one of your tests
-        finishes — including whether it circuit-broke.
+        finishes, including whether it circuit-broke
       </p>
 
       <Card>

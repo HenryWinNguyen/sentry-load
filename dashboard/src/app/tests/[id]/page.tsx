@@ -231,9 +231,9 @@ export default function TestPage({
 
       {snap.circuit_broken && (
         <p className="mb-6 rounded-lg bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
-          This test stopped early — your target&apos;s error rate spiked
+          This test stopped early. Your target&apos;s error rate spiked
           past 50%, so we cut it short instead of grinding through the full
-          duration against something that was clearly struggling.
+          duration against something that was clearly struggling
         </p>
       )}
 
@@ -259,8 +259,8 @@ export default function TestPage({
             <CardTitle className="flex items-center gap-1.5">
               Requests per tick
               <InfoTooltip>
-                How many requests landed in each ~1s window — actual
-                moment-to-moment throughput, not a running total.
+                How many requests landed in each ~1s window. Shows real
+                moment-to-moment throughput, not a running total
               </InfoTooltip>
             </CardTitle>
           </CardHeader>
@@ -273,8 +273,9 @@ export default function TestPage({
             <CardTitle className="flex items-center gap-1.5">
               Error rate per tick
               <InfoTooltip>
-                Errors as a % of that tick&apos;s requests — spikes show up
-                immediately instead of being smoothed into the running total.
+                Errors as a percent of that tick&apos;s requests. Spikes
+                show up immediately instead of being smoothed into the
+                running total
               </InfoTooltip>
             </CardTitle>
           </CardHeader>
@@ -294,8 +295,8 @@ export default function TestPage({
             <CardTitle className="flex items-center gap-1.5">
               Combined RPS over time
               <InfoTooltip>
-                The coordinator&apos;s own running-average RPS, for comparison
-                against the per-tick view above.
+                The coordinator&apos;s own running-average RPS. Useful for
+                comparing against the per-tick view above
               </InfoTooltip>
             </CardTitle>
           </CardHeader>
@@ -310,9 +311,9 @@ export default function TestPage({
           <CardTitle className="flex items-center gap-1.5">
             Per worker
             <InfoTooltip>
-              Each worker&apos;s own latency percentiles are shown separately,
-              not averaged together — merging percentiles across independent
-              machines isn&apos;t statistically valid without the raw samples.
+              Each worker&apos;s latency percentiles are shown separately.
+              Merging percentiles across independent machines isn&apos;t
+              statistically valid without the raw samples
             </InfoTooltip>
           </CardTitle>
         </CardHeader>
@@ -371,8 +372,8 @@ export default function TestPage({
           </h2>
           <p className="mb-4 text-sm text-muted-foreground">
             Your last {trend.length} runs against this exact URL, oldest to
-            newest — a rising RPS line or a falling error-rate line means
-            it&apos;s actually getting better, not just this one run.
+            newest. A rising RPS line or a falling error-rate line means
+            it&apos;s actually getting better, not just this one run
           </p>
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
             <Card>
@@ -380,7 +381,7 @@ export default function TestPage({
                 <CardTitle className="flex items-center gap-1.5">
                   Combined RPS across runs
                   <InfoTooltip>
-                    Each point is one finished test&apos;s final combined RPS.
+                    Each point is one finished test&apos;s final combined RPS
                   </InfoTooltip>
                 </CardTitle>
               </CardHeader>
@@ -396,7 +397,7 @@ export default function TestPage({
                 <CardTitle className="flex items-center gap-1.5">
                   Error rate across runs
                   <InfoTooltip>
-                    Each point is one finished test&apos;s overall error rate.
+                    Each point is one finished test&apos;s overall error rate
                   </InfoTooltip>
                 </CardTitle>
               </CardHeader>
