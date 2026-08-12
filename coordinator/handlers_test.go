@@ -184,6 +184,36 @@ func (f *fakeHistoryStore) GetByShareToken(_ context.Context, shareToken string)
 	return TestSnapshot{}, false, nil
 }
 
+func (f *fakeHistoryStore) SetLabel(_ context.Context, testID, ownerID, label string) (bool, error) {
+	if f.err != nil {
+		return false, f.err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.owner[testID] != ownerID {
+		return false, nil
+	}
+	snap := f.byID[testID]
+	snap.Label = label
+	f.byID[testID] = snap
+	return true, nil
+}
+
+func (f *fakeHistoryStore) Delete(_ context.Context, testID, ownerID string) (bool, error) {
+	if f.err != nil {
+		return false, f.err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.owner[testID] != ownerID {
+		return false, nil
+	}
+	delete(f.byID, testID)
+	delete(f.owner, testID)
+	delete(f.shareTokens, testID)
+	return true, nil
+}
+
 // fakeWorkerCounter is a fixed, non-erroring workerCounter — most tests
 // don't care about capacity admission control at all, so a generous
 // default (5) means fanout/worker_count values used elsewhere in the
@@ -1151,6 +1181,143 @@ func TestHandleShareTestAnotherUsersTest(t *testing.T) {
 	resp := authedRequest(t, http.MethodPost, server.URL+"/tests/test-1/share", otherToken, nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("got status %d, want 404 (can't share someone else's test)", resp.StatusCode)
+	}
+}
+
+func TestHandleDeleteTestWithoutHistoryConfigured(t *testing.T) {
+	server := newTestServer(t, &fakeEnqueuer{}, fakeResolver{}, http.DefaultClient)
+	token := server.login(t)
+
+	resp := authedRequest(t, http.MethodDelete, server.URL+"/tests/test-1", token, nil)
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("got status %d, want 501 (Postgres not configured)", resp.StatusCode)
+	}
+}
+
+func TestHandleDeleteTestUnknownID(t *testing.T) {
+	server := newTestServerWithHistory(t, &fakeEnqueuer{})
+	token := server.login(t)
+
+	resp := authedRequest(t, http.MethodDelete, server.URL+"/tests/does-not-exist", token, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("got status %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestHandleDeleteTestAnotherUsersTest(t *testing.T) {
+	server := newTestServerWithHistory(t, &fakeEnqueuer{})
+	owner, _ := server.users.FindOrCreate(1, "owner")
+	server.history.byID["test-1"] = TestSnapshot{TestID: "test-1", URL: "http://allowed.example.com/fast", Done: true}
+	server.history.owner["test-1"] = owner.ID
+
+	other, _ := server.users.FindOrCreate(2, "someone-else")
+	otherToken, err := server.users.IssueSession(other.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	resp := authedRequest(t, http.MethodDelete, server.URL+"/tests/test-1", otherToken, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("got status %d, want 404 (can't delete someone else's test)", resp.StatusCode)
+	}
+	if _, ok := server.history.byID["test-1"]; !ok {
+		t.Fatal("test-1 should still exist — the delete attempt was from a non-owner and must not have removed it")
+	}
+}
+
+func TestHandleDeleteTestRemovesOwnedTest(t *testing.T) {
+	server := newTestServerWithHistory(t, &fakeEnqueuer{})
+	token := server.login(t)
+	user, _ := server.users.FindOrCreate(1, "henry")
+	server.history.byID["test-1"] = TestSnapshot{TestID: "test-1", URL: "http://allowed.example.com/fast", Done: true}
+	server.history.owner["test-1"] = user.ID
+
+	resp := authedRequest(t, http.MethodDelete, server.URL+"/tests/test-1", token, nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("got status %d, want 204", resp.StatusCode)
+	}
+	if _, ok := server.history.byID["test-1"]; ok {
+		t.Fatal("expected test-1 to be gone from history after delete")
+	}
+
+	// Deleting again (already gone) reads the same as deleting an unknown ID.
+	resp2 := authedRequest(t, http.MethodDelete, server.URL+"/tests/test-1", token, nil)
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Fatalf("second delete: got status %d, want 404", resp2.StatusCode)
+	}
+}
+
+func TestHandleSetTestLabelWithoutHistoryConfigured(t *testing.T) {
+	server := newTestServer(t, &fakeEnqueuer{}, fakeResolver{}, http.DefaultClient)
+	token := server.login(t)
+
+	resp := authedRequest(t, http.MethodPut, server.URL+"/tests/test-1/label", token, setLabelRequest{Label: "Pre-launch check"})
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("got status %d, want 501 (Postgres not configured)", resp.StatusCode)
+	}
+}
+
+func TestHandleSetTestLabelAnotherUsersTest(t *testing.T) {
+	server := newTestServerWithHistory(t, &fakeEnqueuer{})
+	owner, _ := server.users.FindOrCreate(1, "owner")
+	server.history.byID["test-1"] = TestSnapshot{TestID: "test-1", URL: "http://allowed.example.com/fast", Done: true}
+	server.history.owner["test-1"] = owner.ID
+
+	other, _ := server.users.FindOrCreate(2, "someone-else")
+	otherToken, err := server.users.IssueSession(other.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	resp := authedRequest(t, http.MethodPut, server.URL+"/tests/test-1/label", otherToken, setLabelRequest{Label: "Hijacked"})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("got status %d, want 404 (can't label someone else's test)", resp.StatusCode)
+	}
+}
+
+// TestHandleSetTestLabelRoundTripsThroughListAndTrend proves the label
+// isn't just accepted and discarded — it actually persists and shows up
+// everywhere the test itself does: a direct fetch, the plain history
+// list, and the per-target trend view.
+func TestHandleSetTestLabelRoundTripsThroughListAndTrend(t *testing.T) {
+	server := newTestServerWithHistory(t, &fakeEnqueuer{})
+	token := server.login(t)
+	user, _ := server.users.FindOrCreate(1, "henry")
+	now := time.Now()
+	server.history.byID["test-1"] = TestSnapshot{TestID: "test-1", URL: "http://allowed.example.com/fast", Done: true, FinishedAt: &now}
+	server.history.owner["test-1"] = user.ID
+
+	setResp := authedRequest(t, http.MethodPut, server.URL+"/tests/test-1/label", token, setLabelRequest{Label: "Pre-launch check"})
+	if setResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT label: got status %d, want 200", setResp.StatusCode)
+	}
+	var setGot setLabelResponse
+	json.NewDecoder(setResp.Body).Decode(&setGot)
+	if setGot.Label != "Pre-launch check" {
+		t.Fatalf("got label %q in response, want %q", setGot.Label, "Pre-launch check")
+	}
+
+	getResp := authedRequest(t, http.MethodGet, server.URL+"/tests", token, nil)
+	var list []TestSnapshot
+	json.NewDecoder(getResp.Body).Decode(&list)
+	if len(list) != 1 || list[0].Label != "Pre-launch check" {
+		t.Fatalf("GET /tests: got %+v, want one entry labeled %q", list, "Pre-launch check")
+	}
+
+	trendResp := authedRequest(t, http.MethodGet, server.URL+"/tests/trend?url=http://allowed.example.com/fast", token, nil)
+	var trend []TestSnapshot
+	json.NewDecoder(trendResp.Body).Decode(&trend)
+	if len(trend) != 1 || trend[0].Label != "Pre-launch check" {
+		t.Fatalf("GET /tests/trend: got %+v, want one entry labeled %q", trend, "Pre-launch check")
+	}
+
+	// Clearing with an empty string must actually clear it, not be a no-op.
+	clearResp := authedRequest(t, http.MethodPut, server.URL+"/tests/test-1/label", token, setLabelRequest{Label: ""})
+	if clearResp.StatusCode != http.StatusOK {
+		t.Fatalf("clearing: got status %d, want 200", clearResp.StatusCode)
+	}
+	if server.history.byID["test-1"].Label != "" {
+		t.Fatalf("got label %q after clearing, want empty", server.history.byID["test-1"].Label)
 	}
 }
 

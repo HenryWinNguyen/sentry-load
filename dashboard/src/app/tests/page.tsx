@@ -8,14 +8,17 @@ import {
   CreateTestInput,
   TestSnapshot,
   createTest,
+  deleteTest,
   getToken,
   listTests,
+  setTestLabel,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import InfoTooltip from "@/components/InfoTooltip";
+import { Pencil, Trash2 } from "lucide-react";
 
 // Presets tuned to indie-launch scale (SCOPE.md M14), not raw enterprise
 // configurability, just enough to get a first-timer to a sensible test
@@ -337,39 +340,140 @@ export default function TestsPage() {
       {tests && tests.length > 0 && (
         <Card>
           <CardContent className="divide-y p-0">
-            {tests.map((t) => {
-              const errorRate =
-                t.total_requests > 0
-                  ? ((t.total_errors / t.total_requests) * 100).toFixed(1)
-                  : "0.0";
-              return (
-                <Link
-                  key={t.test_id}
-                  href={`/tests/${t.test_id}`}
-                  className="flex items-center justify-between px-4 py-3 first:rounded-t-xl last:rounded-b-xl hover:bg-muted"
-                >
-                  <div>
-                    <p className="break-all text-sm font-medium">{t.url}</p>
-                    <p className="font-mono text-xs text-muted-foreground">
-                      {t.test_id.slice(0, 8)}
-                    </p>
-                  </div>
-                  <div className="text-right text-sm">
-                    <p>
-                      {t.total_requests} req · {errorRate}% errors
-                    </p>
-                    {t.circuit_broken && (
-                      <p className="text-amber-600 dark:text-amber-400">
-                        circuit-broken
-                      </p>
-                    )}
-                  </div>
-                </Link>
-              );
-            })}
+            {tests.map((t) => (
+              <HistoryRow
+                key={t.test_id}
+                test={t}
+                onDeleted={(id) =>
+                  setTests((cur) => (cur ? cur.filter((x) => x.test_id !== id) : cur))
+                }
+                onLabelChanged={(id, label) =>
+                  setTests((cur) =>
+                    cur ? cur.map((x) => (x.test_id === id ? { ...x, label } : x)) : cur,
+                  )
+                }
+              />
+            ))}
           </CardContent>
         </Card>
       )}
     </main>
+  );
+}
+
+function HistoryRow({
+  test,
+  onDeleted,
+  onLabelChanged,
+}: {
+  test: TestSnapshot;
+  onDeleted: (id: string) => void;
+  onLabelChanged: (id: string, label: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(test.label ?? "");
+  const [busy, setBusy] = useState(false);
+
+  const errorRate =
+    test.total_requests > 0
+      ? ((test.total_errors / test.total_requests) * 100).toFixed(1)
+      : "0.0";
+
+  async function saveLabel() {
+    setBusy(true);
+    try {
+      const { label } = await setTestLabel(test.test_id, draft.trim());
+      onLabelChanged(test.test_id, label);
+      setEditing(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDelete(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!window.confirm("Delete this test? This can't be undone.")) return;
+    setBusy(true);
+    try {
+      await deleteTest(test.test_id);
+      onDeleted(test.test_id);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-3 px-4 py-3 first:rounded-t-xl last:rounded-b-xl hover:bg-muted">
+      {editing ? (
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <Input
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveLabel();
+              if (e.key === "Escape") setEditing(false);
+            }}
+            placeholder={test.url}
+            className="h-8"
+          />
+          <Button size="sm" onClick={saveLabel} disabled={busy}>
+            Save
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setEditing(false)} disabled={busy}>
+            Cancel
+          </Button>
+        </div>
+      ) : (
+        <Link href={`/tests/${test.test_id}`} className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium">{test.label || test.url}</p>
+          {test.label && (
+            <p className="truncate text-xs text-muted-foreground">{test.url}</p>
+          )}
+          <p className="font-mono text-xs text-muted-foreground">
+            {test.test_id.slice(0, 8)}
+          </p>
+        </Link>
+      )}
+
+      {!editing && (
+        <div className="shrink-0 text-right text-sm">
+          <p>
+            {test.total_requests} req · {errorRate}% errors
+          </p>
+          {test.circuit_broken && (
+            <p className="text-amber-600 dark:text-amber-400">circuit-broken</p>
+          )}
+        </div>
+      )}
+
+      {!editing && (
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setDraft(test.label ?? "");
+              setEditing(true);
+            }}
+            aria-label="Rename"
+            className="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={handleDelete}
+            disabled={busy}
+            aria-label="Delete"
+            className="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

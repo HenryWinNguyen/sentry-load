@@ -80,8 +80,11 @@ export default function PublicReportPage({
             Load test report
           </p>
           <h1 className="break-all text-2xl font-semibold tracking-tight">
-            {snap.url}
+            {snap.label || snap.url}
           </h1>
+          {snap.label && (
+            <p className="break-all text-sm text-muted-foreground">{snap.url}</p>
+          )}
         </div>
         <StatusDot status={testStatus(true, snap.circuit_broken)} size="md" />
       </div>

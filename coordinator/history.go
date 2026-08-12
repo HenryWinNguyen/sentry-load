@@ -34,6 +34,18 @@ type testHistoryStore interface {
 	// owner check, since the whole point of a share token is that anyone
 	// holding the link can view the result.
 	GetByShareToken(ctx context.Context, shareToken string) (TestSnapshot, bool, error)
+
+	// SetLabel sets or clears testID's user-facing display name, scoped to
+	// ownerID the same way every other per-test operation here is — lets
+	// someone tell "Pre-launch checkout test" apart from a bare URL and a
+	// UUID once their history has more than a couple of entries in it.
+	SetLabel(ctx context.Context, testID, ownerID, label string) (bool, error)
+	// Delete removes testID and its sub-jobs, scoped to ownerID. Personal
+	// history cleanup only — there's no concept of a shared/team history
+	// to delete from (see SCOPE.md: team/org accounts are permanently out
+	// of scope), just each user's own list getting long enough to want to
+	// prune it.
+	Delete(ctx context.Context, testID, ownerID string) (bool, error)
 }
 
 // postgresHistory is the production testHistoryStore, backed by Postgres.
@@ -84,6 +96,7 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			finished_at    TIMESTAMPTZ NOT NULL
 		);
 		ALTER TABLE tests ADD COLUMN IF NOT EXISTS share_token TEXT;
+		ALTER TABLE tests ADD COLUMN IF NOT EXISTS label TEXT;
 		CREATE INDEX IF NOT EXISTS idx_tests_owner ON tests (owner_id, finished_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_tests_owner_url ON tests (owner_id, url, finished_at);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_tests_share_token ON tests (share_token) WHERE share_token IS NOT NULL;
@@ -155,9 +168,9 @@ func (h *postgresHistory) Save(ctx context.Context, snap TestSnapshot, ownerID s
 func (h *postgresHistory) Get(ctx context.Context, testID, ownerID string) (TestSnapshot, bool, error) {
 	var snap TestSnapshot
 	err := h.pool.QueryRow(ctx, `
-		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken
+		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken, COALESCE(label, '')
 		FROM tests WHERE test_id = $1 AND owner_id = $2
-	`, testID, ownerID).Scan(&snap.TestID, &snap.URL, &snap.TotalRequests, &snap.TotalErrors, &snap.CombinedRPS, &snap.CircuitBroken)
+	`, testID, ownerID).Scan(&snap.TestID, &snap.URL, &snap.TotalRequests, &snap.TotalErrors, &snap.CombinedRPS, &snap.CircuitBroken, &snap.Label)
 	if err != nil {
 		return TestSnapshot{}, false, nil //nolint:nilerr // "not found" isn't a caller-facing error here, same as TestStore.Snapshot
 	}
@@ -203,9 +216,9 @@ func (h *postgresHistory) EnsureShareToken(ctx context.Context, testID, ownerID 
 func (h *postgresHistory) GetByShareToken(ctx context.Context, shareToken string) (TestSnapshot, bool, error) {
 	var snap TestSnapshot
 	err := h.pool.QueryRow(ctx, `
-		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken
+		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken, COALESCE(label, '')
 		FROM tests WHERE share_token = $1
-	`, shareToken).Scan(&snap.TestID, &snap.URL, &snap.TotalRequests, &snap.TotalErrors, &snap.CombinedRPS, &snap.CircuitBroken)
+	`, shareToken).Scan(&snap.TestID, &snap.URL, &snap.TotalRequests, &snap.TotalErrors, &snap.CombinedRPS, &snap.CircuitBroken, &snap.Label)
 	if err != nil {
 		return TestSnapshot{}, false, nil //nolint:nilerr
 	}
@@ -244,7 +257,7 @@ func (h *postgresHistory) loadSubJobs(ctx context.Context, testID string) ([]Sub
 // List returns ownerID's most recent tests, newest first, capped at limit.
 func (h *postgresHistory) List(ctx context.Context, ownerID string, limit int) ([]TestSnapshot, error) {
 	rows, err := h.pool.Query(ctx, `
-		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken, finished_at
+		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken, finished_at, COALESCE(label, '')
 		FROM tests WHERE owner_id = $1 ORDER BY finished_at DESC LIMIT $2
 	`, ownerID, limit)
 	if err != nil {
@@ -259,7 +272,7 @@ func (h *postgresHistory) List(ctx context.Context, ownerID string, limit int) (
 // series to plot rather than a "most recent N" list.
 func (h *postgresHistory) ListByURL(ctx context.Context, ownerID, url string, limit int) ([]TestSnapshot, error) {
 	rows, err := h.pool.Query(ctx, `
-		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken, finished_at
+		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken, finished_at, COALESCE(label, '')
 		FROM tests WHERE owner_id = $1 AND url = $2 ORDER BY finished_at ASC LIMIT $3
 	`, ownerID, url, limit)
 	if err != nil {
@@ -269,12 +282,34 @@ func (h *postgresHistory) ListByURL(ctx context.Context, ownerID, url string, li
 	return scanTestRows(rows)
 }
 
+// SetLabel sets or clears testID's display name, scoped to ownerID. Reports
+// ok=false if testID doesn't exist or isn't owned by ownerID, same as every
+// other per-test operation in this file.
+func (h *postgresHistory) SetLabel(ctx context.Context, testID, ownerID, label string) (bool, error) {
+	tag, err := h.pool.Exec(ctx, `UPDATE tests SET label = $1 WHERE test_id = $2 AND owner_id = $3`, label, testID, ownerID)
+	if err != nil {
+		return false, fmt.Errorf("setting label for %s: %w", testID, err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// Delete removes testID and its sub-jobs, scoped to ownerID. sub_jobs has
+// ON DELETE CASCADE on its test_id foreign key, so deleting the tests row
+// is sufficient — no separate cleanup query needed.
+func (h *postgresHistory) Delete(ctx context.Context, testID, ownerID string) (bool, error) {
+	tag, err := h.pool.Exec(ctx, `DELETE FROM tests WHERE test_id = $1 AND owner_id = $2`, testID, ownerID)
+	if err != nil {
+		return false, fmt.Errorf("deleting test %s: %w", testID, err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 func scanTestRows(rows pgx.Rows) ([]TestSnapshot, error) {
 	var snaps []TestSnapshot
 	for rows.Next() {
 		var snap TestSnapshot
 		var finishedAt time.Time
-		if err := rows.Scan(&snap.TestID, &snap.URL, &snap.TotalRequests, &snap.TotalErrors, &snap.CombinedRPS, &snap.CircuitBroken, &finishedAt); err != nil {
+		if err := rows.Scan(&snap.TestID, &snap.URL, &snap.TotalRequests, &snap.TotalErrors, &snap.CombinedRPS, &snap.CircuitBroken, &finishedAt, &snap.Label); err != nil {
 			return nil, fmt.Errorf("scanning test row: %w", err)
 		}
 		snap.Done = true
