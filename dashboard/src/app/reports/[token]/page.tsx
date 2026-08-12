@@ -5,10 +5,10 @@ import Link from "next/link";
 import { ApiError, TestSnapshot, getPublicReport } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import StatusDot, { testStatus } from "@/components/StatusDot";
+import InfoTooltip from "@/components/InfoTooltip";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -99,11 +99,13 @@ export default function PublicReportPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>Per worker</CardTitle>
-          <CardDescription>
-            Each worker&apos;s own latency percentiles, shown separately
-            rather than averaged together.
-          </CardDescription>
+          <CardTitle className="flex items-center gap-1.5">
+            Per worker
+            <InfoTooltip>
+              Each worker&apos;s own latency percentiles, shown separately
+              rather than averaged together.
+            </InfoTooltip>
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <Table>

@@ -18,7 +18,6 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -34,6 +33,7 @@ import LineChart from "@/components/LineChart";
 import BarChart from "@/components/BarChart";
 import AnimatedNumber from "@/components/AnimatedNumber";
 import StatusDot, { testStatus } from "@/components/StatusDot";
+import InfoTooltip from "@/components/InfoTooltip";
 
 // Cumulative totals climb every tick regardless of what's actually
 // happening right now, which buries spikes — a jump from 0 to 20 errors
@@ -189,7 +189,7 @@ export default function TestPage({
     <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-10">
       <Link
         href="/tests"
-        className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary"
+        className="group -ml-2 mb-4 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <svg
           width="14"
@@ -198,6 +198,7 @@ export default function TestPage({
           fill="none"
           stroke="currentColor"
           strokeWidth={1.5}
+          className="transition-transform duration-150 group-hover:-translate-x-0.5"
         >
           <path d="M10 12.5 5.5 8 10 3.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -255,11 +256,13 @@ export default function TestPage({
       <div className="mb-8 grid grid-cols-1 gap-6 sm:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Requests per tick</CardTitle>
-            <CardDescription>
-              How many requests landed in each ~1s window — actual
-              moment-to-moment throughput, not a running total.
-            </CardDescription>
+            <CardTitle className="flex items-center gap-1.5">
+              Requests per tick
+              <InfoTooltip>
+                How many requests landed in each ~1s window — actual
+                moment-to-moment throughput, not a running total.
+              </InfoTooltip>
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <BarChart points={requestsPerTick} formatValue={(v) => v.toFixed(0)} />
@@ -267,11 +270,13 @@ export default function TestPage({
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Error rate per tick</CardTitle>
-            <CardDescription>
-              Errors as a % of that tick&apos;s requests — spikes show up
-              immediately instead of being smoothed into the running total.
-            </CardDescription>
+            <CardTitle className="flex items-center gap-1.5">
+              Error rate per tick
+              <InfoTooltip>
+                Errors as a % of that tick&apos;s requests — spikes show up
+                immediately instead of being smoothed into the running total.
+              </InfoTooltip>
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <LineChart
@@ -286,11 +291,13 @@ export default function TestPage({
       <div className="mb-8">
         <Card>
           <CardHeader>
-            <CardTitle>Combined RPS over time</CardTitle>
-            <CardDescription>
-              The coordinator&apos;s own running-average RPS, for comparison
-              against the per-tick view above.
-            </CardDescription>
+            <CardTitle className="flex items-center gap-1.5">
+              Combined RPS over time
+              <InfoTooltip>
+                The coordinator&apos;s own running-average RPS, for comparison
+                against the per-tick view above.
+              </InfoTooltip>
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <LineChart points={rpsHistory} formatValue={(v) => v.toFixed(1)} />
@@ -300,12 +307,14 @@ export default function TestPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>Per worker</CardTitle>
-          <CardDescription>
-            Each worker&apos;s own latency percentiles are shown separately,
-            not averaged together — merging percentiles across independent
-            machines isn&apos;t statistically valid without the raw samples.
-          </CardDescription>
+          <CardTitle className="flex items-center gap-1.5">
+            Per worker
+            <InfoTooltip>
+              Each worker&apos;s own latency percentiles are shown separately,
+              not averaged together — merging percentiles across independent
+              machines isn&apos;t statistically valid without the raw samples.
+            </InfoTooltip>
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <Table>
@@ -368,10 +377,12 @@ export default function TestPage({
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
             <Card>
               <CardHeader>
-                <CardTitle>Combined RPS across runs</CardTitle>
-                <CardDescription>
-                  Each point is one finished test&apos;s final combined RPS.
-                </CardDescription>
+                <CardTitle className="flex items-center gap-1.5">
+                  Combined RPS across runs
+                  <InfoTooltip>
+                    Each point is one finished test&apos;s final combined RPS.
+                  </InfoTooltip>
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <LineChart
@@ -382,10 +393,12 @@ export default function TestPage({
             </Card>
             <Card>
               <CardHeader>
-                <CardTitle>Error rate across runs</CardTitle>
-                <CardDescription>
-                  Each point is one finished test&apos;s overall error rate.
-                </CardDescription>
+                <CardTitle className="flex items-center gap-1.5">
+                  Error rate across runs
+                  <InfoTooltip>
+                    Each point is one finished test&apos;s overall error rate.
+                  </InfoTooltip>
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <LineChart
