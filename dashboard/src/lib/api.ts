@@ -88,6 +88,9 @@ export interface SubJobSnapshot {
   p99_ms: string;
   done: boolean;
   circuit_broken: boolean;
+  // Every worker that picked this sub-job up died mid-run, so the fleet
+  // gave up on it. Its numbers are whatever was last reported.
+  abandoned?: boolean;
 }
 
 export interface TestSnapshot {
@@ -95,6 +98,7 @@ export interface TestSnapshot {
   url: string;
   done: boolean;
   circuit_broken: boolean;
+  abandoned?: boolean;
   total_requests: number;
   total_errors: number;
   combined_rps: number;

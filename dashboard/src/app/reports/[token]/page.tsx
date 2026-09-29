@@ -86,7 +86,10 @@ export default function PublicReportPage({
             <p className="break-all text-sm text-muted-foreground">{snap.url}</p>
           )}
         </div>
-        <StatusDot status={testStatus(true, snap.circuit_broken)} size="md" />
+        <StatusDot
+          status={testStatus(true, snap.circuit_broken, snap.abandoned)}
+          size="md"
+        />
       </div>
 
       <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-4">

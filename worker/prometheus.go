@@ -33,6 +33,16 @@ var (
 		Name: "sentry_worker_request_errors_total",
 		Help: "Total request errors (connection failures or 5xx) this worker has recorded.",
 	})
+
+	jobsReclaimedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "sentry_worker_jobs_reclaimed_total",
+		Help: "Stalled jobs this worker took over from a worker that stopped renewing its lease.",
+	})
+
+	jobsAbandonedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "sentry_worker_jobs_abandoned_total",
+		Help: "Jobs this worker gave up on after they hit the max delivery count.",
+	})
 )
 
 // serveMetrics runs a small HTTP server exposing /metrics for Prometheus to

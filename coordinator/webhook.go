@@ -62,8 +62,11 @@ func (n *chatWebhookNotifier) Notify(ctx context.Context, webhookURL string, sna
 // relying on either's markdown dialect would render wrong on one of them.
 func formatWebhookMessage(snap TestSnapshot, reportURL string) string {
 	status := "finished"
-	if snap.CircuitBroken {
+	switch {
+	case snap.CircuitBroken:
 		status = "circuit-broken — target error rate spiked, aborted early"
+	case snap.Abandoned:
+		status = "incomplete — workers kept failing mid-run, part of the load was never generated"
 	}
 	errRate := 0.0
 	if snap.TotalRequests > 0 {

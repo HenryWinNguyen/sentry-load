@@ -289,7 +289,11 @@ export default function TestPage({
           </div>
         )}
         <div className="flex shrink-0 items-center gap-2">
-          <StatusBadge done={snap.done} circuitBroken={snap.circuit_broken} />
+          <StatusBadge
+            done={snap.done}
+            circuitBroken={snap.circuit_broken}
+            abandoned={snap.abandoned ?? false}
+          />
           {snap.done && !editingLabel && (
             <button
               type="button"
@@ -321,6 +325,15 @@ export default function TestPage({
           This test stopped early. Your target&apos;s error rate spiked
           past 50%, so we cut it short instead of grinding through the full
           duration against something that was clearly struggling
+        </p>
+      )}
+
+      {snap.abandoned && (
+        <p className="mb-6 rounded-lg bg-muted px-4 py-3 text-sm text-muted-foreground">
+          Part of this test never finished. The workers running it kept
+          failing mid-run, so after a few retries we stopped rather than
+          leave it hanging. Totals below only cover the load that actually
+          ran
         </p>
       )}
 
@@ -443,7 +456,9 @@ export default function TestPage({
                     {sj.p99_ms}ms
                   </TableCell>
                   <TableCell>
-                    <StatusDot status={testStatus(sj.done, sj.circuit_broken)} />
+                    <StatusDot
+                      status={testStatus(sj.done, sj.circuit_broken, sj.abandoned)}
+                    />
                   </TableCell>
                 </TableRow>
               ))}
@@ -619,9 +634,11 @@ function Stat({
 function StatusBadge({
   done,
   circuitBroken,
+  abandoned,
 }: {
   done: boolean;
   circuitBroken: boolean;
+  abandoned: boolean;
 }) {
-  return <StatusDot status={testStatus(done, circuitBroken)} size="md" />;
+  return <StatusDot status={testStatus(done, circuitBroken, abandoned)} size="md" />;
 }
