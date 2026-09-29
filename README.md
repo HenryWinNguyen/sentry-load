@@ -60,10 +60,13 @@ Users → │  Control API │ (Go) — auth, domain verification, job config, r
    refuses or clamps-with-a-warning instead of silently under-delivering
    if you ask for more workers than are actually online.
 4. **Workers fan out across real, independent machines** (currently an
-   always-on Oracle Cloud VM + a GCP instance in a different region — see
-   [`docs/PROGRESS.md`](docs/PROGRESS.md) for exactly how) and stream
-   metrics back over Redis Streams.
-5. **Results persist and produce a shareable report link** — the "load
+   always-on Oracle Cloud VM + a GCP instance in a different region) and
+   stream metrics back over Redis Streams. If a worker dies mid-test,
+   another one picks its job back up once its lease lapses.
+5. **Latency percentiles are test-wide and accurate** — each worker ships
+   a mergeable latency histogram, so the p95 you see covers every request
+   across every machine (within 1%), not an average of per-worker p95s.
+6. **Results persist and produce a shareable report link** — the "load
    tested by Sentry Load" badge doubles as a growth loop: drop it in a
    README, or wire the included [GitHub Action](.github/actions/load-test)
    to auto-load-test every PR preview deployment and comment the results.
@@ -94,14 +97,25 @@ go run ./coordinator            # HTTP API on :8080
 (cd dashboard && npm run dev)   # dashboard on :3000
 ```
 
-Full command reference and env vars: [`CLAUDE.md`](CLAUDE.md).
+Env vars: `REDIS_ADDR`, `REDIS_PASSWORD`, `POSTGRES_URL` (history,
+users, sessions, verified domains; everything but history still works
+in-memory without it), `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`/
+`GITHUB_REDIRECT_URL`, `DASHBOARD_URL`, `ALLOWLISTED_HOSTS`.
+
+Integration tests against real Redis/Postgres run in CI and are skipped
+locally unless you point them at a scratch instance:
+
+```bash
+TEST_REDIS_ADDR=localhost:6379 \
+TEST_POSTGRES_URL='postgres://sentryload:sentryload@localhost:5432/sentryload?sslmode=disable' \
+go test ./coordinator/... ./worker/...
+```
 
 ## Project background
 
-Built incrementally, milestone by milestone, with the full build log
-(including bugs hit and how they got fixed) kept in
-[`docs/PROGRESS.md`](docs/PROGRESS.md). Scope, architecture decisions, and
-what's deliberately *not* in scope: [`SCOPE.md`](SCOPE.md).
+Built incrementally, milestone by milestone — one PR per milestone in
+this repo's history. Scope, architecture decisions, and what's
+deliberately *not* in scope: [`SCOPE.md`](SCOPE.md).
 
 ## License
 

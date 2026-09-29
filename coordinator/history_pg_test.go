@@ -2,18 +2,33 @@ package main
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"testing"
 )
+
+// testPostgresURL returns TEST_POSTGRES_URL, skipping the test if it's
+// unset. These tests TRUNCATE tables, so it refuses anything but a local
+// database: a production connection string pasted into the wrong env var
+// must not be able to wipe real history.
+func testPostgresURL(t *testing.T) string {
+	t.Helper()
+	raw := os.Getenv("TEST_POSTGRES_URL")
+	if raw == "" {
+		t.Skip("TEST_POSTGRES_URL not set")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1") {
+		t.Fatalf("TEST_POSTGRES_URL must point at localhost; these tests truncate tables")
+	}
+	return raw
+}
 
 // TestPostgresHistoryRoundTrip runs history's real SQL against a real
 // database — skipped unless TEST_POSTGRES_URL is set (see
 // TestPostgresIdentityRoundTrip).
 func TestPostgresHistoryRoundTrip(t *testing.T) {
-	url := os.Getenv("TEST_POSTGRES_URL")
-	if url == "" {
-		t.Skip("TEST_POSTGRES_URL not set")
-	}
+	url := testPostgresURL(t)
 	ctx := context.Background()
 	h, err := newPostgresHistory(ctx, url)
 	if err != nil {
@@ -54,10 +69,7 @@ func TestPostgresHistoryRoundTrip(t *testing.T) {
 }
 
 func TestPostgresHistoryRoundTripsCombinedPercentiles(t *testing.T) {
-	url := os.Getenv("TEST_POSTGRES_URL")
-	if url == "" {
-		t.Skip("TEST_POSTGRES_URL not set")
-	}
+	url := testPostgresURL(t)
 	ctx := context.Background()
 	h, err := newPostgresHistory(ctx, url)
 	if err != nil {
