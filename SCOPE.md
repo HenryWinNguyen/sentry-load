@@ -130,7 +130,7 @@ ephemeral-GitHub-Actions-runner model above. The `.github/workflows/
 worker.yml` ephemeral-worker workflow described above still exists and
 still works, but it depended on Redis being reachable from the public
 internet with no password — which got opportunistically attacked within
-weeks of being exposed (see `docs/PROGRESS.md`'s 2026-08-10 entry). That
+weeks of being exposed (2026-08-10). That
 port is now closed. Re-enabling the ephemeral-runner path needs a Redis
 password threaded through as a GitHub secret first — not done, no
 timeline.
@@ -239,7 +239,23 @@ end to end, deployed on real (free-tier) infrastructure, not just localhost.
   existing 954MB Oracle VM wouldn't demonstrate genuine orchestration or
   autoscaling — it'd just be complexity for a checkbox. Effort redirected
   instead toward making the actual multi-region distributed story true in
-  the live product (see `docs/PROGRESS.md` 2026-08-10).
+  the live product.
+
+### Post-launch hardening (2026-09)
+- **M17** — CI: Go vet/gofmt/race tests + dashboard lint/type-check/build
+  on every PR, with Redis and Postgres service containers so integration
+  tests run against the real thing.
+- **M18** — Persist users, sessions, and verified domains in Postgres.
+  User IDs derived from the GitHub ID (a restart used to mint new random
+  IDs and orphan everyone's history); session tokens stored hashed, 30-day
+  expiry.
+- **M19** — Stalled-job recovery: lease renewal on running jobs, reclaim
+  of jobs whose lease lapsed, abandon-after-3-deliveries for poison jobs.
+- **M20** — Test-wide latency percentiles from mergeable log-bucketed
+  sketches (DDSketch-style, 1% relative accuracy) instead of per-worker
+  percentiles only.
+- **M21 (blocked on a domain)** — Replace the ngrok tunnel with a
+  Cloudflare Tunnel; runbook in `ops/CLOUDFLARE_TUNNEL.md`.
 
 ## Open questions for next session
 
