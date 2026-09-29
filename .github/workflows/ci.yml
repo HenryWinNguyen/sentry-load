@@ -1,0 +1,86 @@
+name: CI
+
+# Runs on every PR and every push to main. Go modules get vet + gofmt +
+# race-enabled tests; the dashboard gets lint + type-check + a production
+# build. Redis and Postgres run as service containers so the integration
+# tests (the ones that need a real queue/database, skipped locally unless
+# TEST_REDIS_ADDR / TEST_POSTGRES_URL are set) actually run here instead of
+# only ever being exercised against fakes.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [coordinator, worker, guineapig]
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sentryload
+          POSTGRES_PASSWORD: sentryload
+          POSTGRES_DB: sentryload
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sentryload"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      TEST_REDIS_ADDR: localhost:6379
+      TEST_POSTGRES_URL: postgres://sentryload:sentryload@localhost:5432/sentryload?sslmode=disable
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt'd:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race -count=1 ./...
+
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      # Build before the standalone type-check: Next generates global route
+      # types (LayoutProps, PageProps) into .next/types during the build,
+      # and tsc can't resolve them on a clean checkout without it.
+      - run: npm run build
+      - run: npx tsc --noEmit
