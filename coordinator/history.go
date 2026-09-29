@@ -73,11 +73,18 @@ func newPostgresHistory(ctx context.Context, connString string) (*postgresHistor
 	return &postgresHistory{pool: pool}, nil
 }
 
+// identity returns an identityPersister sharing this store's pool — the
+// users/sessions/verified_domains tables live in the same database and are
+// created by the same migrate call.
+func (h *postgresHistory) identity() *postgresIdentity {
+	return &postgresIdentity{pool: h.pool}
+}
+
 func (h *postgresHistory) Close() {
 	h.pool.Close()
 }
 
-// migrate applies the schema idempotently. Two tables, no ORM, no separate
+// migrate applies the schema idempotently. A handful of tables, no ORM, no separate
 // migration tool — proportionate to the schema's actual size (see
 // CLAUDE.md's "don't over-engineer" guidance). share_token is added via a
 // separate ALTER TABLE (not just in the CREATE TABLE body) since a
@@ -113,6 +120,26 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			circuit_broken BOOLEAN NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS idx_sub_jobs_test ON sub_jobs (test_id);
+
+		CREATE TABLE IF NOT EXISTS users (
+			id           TEXT PRIMARY KEY,
+			github_id    BIGINT NOT NULL UNIQUE,
+			github_login TEXT NOT NULL,
+			webhook_url  TEXT NOT NULL DEFAULT ''
+		);
+
+		CREATE TABLE IF NOT EXISTS sessions (
+			token_hash TEXT PRIMARY KEY,
+			user_id    TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+			expires_at TIMESTAMPTZ NOT NULL
+		);
+
+		CREATE TABLE IF NOT EXISTS verified_domains (
+			domain      TEXT NOT NULL,
+			owner_id    TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+			verified_at TIMESTAMPTZ NOT NULL,
+			PRIMARY KEY (domain, owner_id)
+		);
 	`)
 	return err
 }

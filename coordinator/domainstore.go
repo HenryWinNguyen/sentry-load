@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -12,9 +13,11 @@ import (
 )
 
 // DomainStore tracks per-domain verification challenges and verified
-// status in memory. Good enough for the walking-skeleton stage — losing
-// this on restart just means re-verifying, not losing test history.
-// Persisting it to Postgres is M10's job (SCOPE.md), not before.
+// status. Verified status is written through to Postgres when a persister
+// is attached (LoadDomainStore) — proving ownership of a domain is real
+// effort (a DNS record or a deployed file) that shouldn't be silently
+// undone by a coordinator restart. Outstanding challenges stay
+// memory-only: they're short-lived, and re-issuing one is a single click.
 //
 // verified is keyed by domain, then by the ID of whichever user actually
 // completed that domain's verification — proving ownership of a domain
@@ -27,6 +30,7 @@ type DomainStore struct {
 	mu         sync.Mutex
 	challenges map[string]string
 	verified   map[string]map[string]bool
+	persist    identityPersister // nil = in-memory only
 }
 
 func NewDomainStore() *DomainStore {
@@ -34,6 +38,24 @@ func NewDomainStore() *DomainStore {
 		challenges: make(map[string]string),
 		verified:   make(map[string]map[string]bool),
 	}
+}
+
+// LoadDomainStore builds a DomainStore backed by p, pre-populated with
+// every persisted (domain, owner) verification.
+func LoadDomainStore(ctx context.Context, p identityPersister) (*DomainStore, error) {
+	s := NewDomainStore()
+	s.persist = p
+	verified, err := p.LoadVerifiedDomains(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("loading verified domains: %w", err)
+	}
+	for _, v := range verified {
+		if s.verified[v.Domain] == nil {
+			s.verified[v.Domain] = make(map[string]bool)
+		}
+		s.verified[v.Domain][v.OwnerID] = true
+	}
+	return s, nil
 }
 
 // IssueChallenge generates a fresh random token for domain and remembers
@@ -58,14 +80,24 @@ func (s *DomainStore) Challenge(domain string) (string, bool) {
 }
 
 // MarkVerified records domain as verified by ownerID specifically — it
-// does not authorize any other user to target domain.
-func (s *DomainStore) MarkVerified(domain, ownerID string) {
+// does not authorize any other user to target domain. The persisted write
+// happens first, so a failure never leaves memory claiming a verification
+// that won't survive a restart.
+func (s *DomainStore) MarkVerified(domain, ownerID string) error {
+	if s.persist != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+		defer cancel()
+		if err := s.persist.SaveVerifiedDomain(ctx, verifiedDomain{Domain: domain, OwnerID: ownerID}); err != nil {
+			return fmt.Errorf("persisting verification of %s: %w", domain, err)
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.verified[domain] == nil {
 		s.verified[domain] = make(map[string]bool)
 	}
 	s.verified[domain][ownerID] = true
+	return nil
 }
 
 // IsVerified reports whether ownerID specifically has verified domain —

@@ -263,7 +263,11 @@ func (s *apiServer) handleVerifyDomain(w http.ResponseWriter, r *http.Request) {
 		verified = false
 	}
 	if verified {
-		s.domains.MarkVerified(domain, user.ID)
+		if err := s.domains.MarkVerified(domain, user.ID); err != nil {
+			log.Printf("failed to record verification of %s: %v", domain, err)
+			writeError(w, http.StatusInternalServerError, "verification succeeded but could not be saved; try again")
+			return
+		}
 	}
 
 	writeJSON(w, http.StatusOK, verifyDomainResponse{Domain: domain, Verified: verified})
@@ -668,6 +672,10 @@ func (s *apiServer) handleSetWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "webhook_url must be an https:// URL to a public host, or empty to clear it")
 		return
 	}
-	s.users.SetWebhookURL(user.ID, webhookURL)
+	if _, err := s.users.SetWebhookURL(user.ID, webhookURL); err != nil {
+		log.Printf("failed to save webhook for %s: %v", user.ID, err)
+		writeError(w, http.StatusInternalServerError, "failed to save webhook")
+		return
+	}
 	writeJSON(w, http.StatusOK, webhookSettingsResponse{WebhookURL: webhookURL})
 }
