@@ -65,7 +65,7 @@ func (f *fakeWebhookNotifier) assertNeverCalled(t *testing.T) {
 // store.snapshotUnscoped.
 func setUpFinishedTest(store *TestStore, ownerID, url string, circuitBroken bool) string {
 	store.Register("test-1", ownerID, url, []string{"job-1"})
-	store.Update("test-1", "job-1", 100, 2, 50.5, "10", "20", "30", true, circuitBroken)
+	store.Update("test-1", "job-1", resultUpdate{Requests: 100, Errors: 2, RPS: 50.5, P50: "10", P95: "20", P99: "30", Done: true, CircuitBroken: circuitBroken})
 	return "test-1"
 }
 

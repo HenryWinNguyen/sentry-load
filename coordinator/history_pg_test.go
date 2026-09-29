@@ -52,3 +52,42 @@ func TestPostgresHistoryRoundTrip(t *testing.T) {
 		t.Fatal("another user's test was readable")
 	}
 }
+
+func TestPostgresHistoryRoundTripsCombinedPercentiles(t *testing.T) {
+	url := os.Getenv("TEST_POSTGRES_URL")
+	if url == "" {
+		t.Skip("TEST_POSTGRES_URL not set")
+	}
+	ctx := context.Background()
+	h, err := newPostgresHistory(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	if _, err := h.pool.Exec(ctx, `TRUNCATE tests CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+
+	p50, p95, p99 := 4.2, 88.1, 140.0
+	withP := TestSnapshot{TestID: "with", URL: "https://example.com/", P50MS: &p50, P95MS: &p95, P99MS: &p99}
+	without := TestSnapshot{TestID: "without", URL: "https://example.com/"}
+	for _, s := range []TestSnapshot{withP, without} {
+		if err := h.Save(ctx, s, "gh-1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, _, err := h.Get(ctx, "with", "gh-1")
+	if err != nil || got.P95MS == nil || *got.P95MS != p95 {
+		t.Fatalf("combined p95 not round-tripped: %+v %v", got.P95MS, err)
+	}
+	trend, err := h.ListByURL(ctx, "gh-1", "https://example.com/", 10)
+	if err != nil || len(trend) != 2 {
+		t.Fatalf("trend: %v %v", trend, err)
+	}
+	for _, s := range trend {
+		if (s.TestID == "without") != (s.P95MS == nil) {
+			t.Errorf("test %s: p95 = %v", s.TestID, s.P95MS)
+		}
+	}
+}

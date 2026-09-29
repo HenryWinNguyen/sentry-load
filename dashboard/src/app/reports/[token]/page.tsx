@@ -103,13 +103,22 @@ export default function PublicReportPage({
         <Stat label="Combined RPS" value={snap.combined_rps.toFixed(1)} />
       </div>
 
+      {snap.p95_ms !== undefined && (
+        <div className="mb-6 grid grid-cols-3 gap-4">
+          <Stat label="p50 latency" value={formatMs(snap.p50_ms ?? 0)} />
+          <Stat label="p95 latency" value={formatMs(snap.p95_ms)} />
+          <Stat label="p99 latency" value={formatMs(snap.p99_ms ?? 0)} />
+        </div>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-1.5">
             Per worker
             <InfoTooltip>
-              Each worker&apos;s own latency percentiles, shown separately
-              rather than averaged together.
+              Each worker&apos;s own latency percentiles. The test-wide
+              numbers above merge every worker&apos;s full latency
+              histogram instead of averaging these
             </InfoTooltip>
           </CardTitle>
         </CardHeader>
@@ -167,6 +176,10 @@ export default function PublicReportPage({
       </div>
     </main>
   );
+}
+
+function formatMs(v: number): string {
+  return v < 10 ? `${v.toFixed(1)}ms` : `${Math.round(v)}ms`;
 }
 
 function Stat({

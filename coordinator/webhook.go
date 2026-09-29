@@ -76,6 +76,9 @@ func formatWebhookMessage(snap TestSnapshot, reportURL string) string {
 		"Sentry Load — test %s\n%s\n%d requests, %.1f%% errors, %.1f RPS",
 		status, snap.URL, snap.TotalRequests, errRate, snap.CombinedRPS,
 	)
+	if snap.P95MS != nil {
+		msg += fmt.Sprintf(", p95 %.1fms", *snap.P95MS)
+	}
 	if reportURL != "" {
 		msg += "\n" + reportURL
 	}

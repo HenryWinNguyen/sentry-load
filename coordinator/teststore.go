@@ -1,6 +1,8 @@
 package main
 
 import (
+	"log"
+	"math"
 	"sort"
 	"sync"
 	"time"
@@ -16,6 +18,22 @@ type subJobState struct {
 	done          bool
 	circuitBroken bool // aborted early by the worker's error-rate breaker (M9)
 	abandoned     bool // gave up after repeated worker failures (see worker/reclaim.go)
+	// sketch is this sub-job's latency histogram so far (sketch.go), nil
+	// if the worker didn't send one (an older worker binary) or it didn't
+	// decode.
+	sketch *latencySketch
+}
+
+// resultUpdate is one results-stream snapshot for a sub-job, as reported
+// by its worker.
+type resultUpdate struct {
+	Requests      int
+	Errors        int
+	RPS           float64
+	P50, P95, P99 string
+	Done          bool
+	CircuitBroken bool
+	LatencySketch string // worker/sketch.go's wire format; empty from older workers
 }
 
 // TestState is the full in-memory record of one submitted test: which
@@ -141,7 +159,15 @@ func (s *TestStore) CooldownRemaining(ownerID string, cooldown time.Duration) ti
 // stream is shared, so a snapshot for a test this store never registered
 // (e.g. a stray CLI run, or a test from before a restart) is expected, not
 // a bug.
-func (s *TestStore) Update(testID, jobID string, requests, errors int, rps float64, p50, p95, p99 string, done, circuitBroken bool) (justFinished bool) {
+func (s *TestStore) Update(testID, jobID string, u resultUpdate) (justFinished bool) {
+	var sketch *latencySketch
+	if u.LatencySketch != "" {
+		var err error
+		if sketch, err = decodeLatencySketch(u.LatencySketch); err != nil {
+			log.Printf("ignoring latency sketch for job %s: %v", jobID, err)
+		}
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -154,10 +180,11 @@ func (s *TestStore) Update(testID, jobID string, requests, errors int, rps float
 		return false
 	}
 	wasDone := allSubJobsDone(t)
-	sj.requests, sj.errors, sj.rps = requests, errors, rps
-	sj.p50, sj.p95, sj.p99 = p50, p95, p99
-	sj.done = done
-	sj.circuitBroken = circuitBroken
+	sj.requests, sj.errors, sj.rps = u.Requests, u.Errors, u.RPS
+	sj.p50, sj.p95, sj.p99 = u.P50, u.P95, u.P99
+	sj.done = u.Done
+	sj.circuitBroken = u.CircuitBroken
+	sj.sketch = sketch
 
 	s.notifySubscribers(testID, buildSnapshot(t))
 
@@ -233,11 +260,11 @@ type SubJobSnapshot struct {
 }
 
 // TestSnapshot is the JSON-friendly view of a whole test: merged totals
-// plus each sub-job's own numbers. Percentiles are intentionally per-worker
-// only, not averaged into one combined figure — merging percentiles across
-// independent samples isn't statistically valid without the raw data
-// (verified live in M6: workers on different infra had genuinely different
-// latency distributions).
+// plus each sub-job's own numbers. The test-wide percentiles come from
+// merging every worker's latency sketch (sketch.go) — never from averaging
+// per-worker percentiles, which isn't statistically valid (verified live
+// in M6: workers on different infra had genuinely different latency
+// distributions).
 type TestSnapshot struct {
 	TestID string `json:"test_id"`
 	URL    string `json:"url"`
@@ -245,14 +272,21 @@ type TestSnapshot struct {
 	// PUT /tests/{id}/label — only ever populated from Postgres history,
 	// same as FinishedAt, since a live in-flight test in TestStore has no
 	// concept of a label yet.
-	Label         string           `json:"label,omitempty"`
-	Done          bool             `json:"done"`
-	CircuitBroken bool             `json:"circuit_broken"` // true if any sub-job aborted early (M9)
-	Abandoned     bool             `json:"abandoned"`      // true if any sub-job was abandoned (see SubJobSnapshot.Abandoned)
-	TotalRequests int              `json:"total_requests"`
-	TotalErrors   int              `json:"total_errors"`
-	CombinedRPS   float64          `json:"combined_rps"`
-	SubJobs       []SubJobSnapshot `json:"sub_jobs"`
+	Label         string  `json:"label,omitempty"`
+	Done          bool    `json:"done"`
+	CircuitBroken bool    `json:"circuit_broken"` // true if any sub-job aborted early (M9)
+	Abandoned     bool    `json:"abandoned"`      // true if any sub-job was abandoned (see SubJobSnapshot.Abandoned)
+	TotalRequests int     `json:"total_requests"`
+	TotalErrors   int     `json:"total_errors"`
+	CombinedRPS   float64 `json:"combined_rps"`
+	// P50MS/P95MS/P99MS are test-wide latency percentiles across every
+	// worker, within 1% of the true value. Nil when they can't be computed
+	// honestly: no requests yet, a sub-job from a worker too old to send a
+	// sketch, or a test persisted before sketches existed.
+	P50MS   *float64         `json:"p50_ms,omitempty"`
+	P95MS   *float64         `json:"p95_ms,omitempty"`
+	P99MS   *float64         `json:"p99_ms,omitempty"`
+	SubJobs []SubJobSnapshot `json:"sub_jobs"`
 	// FinishedAt is only populated for snapshots loaded from Postgres
 	// history (nil for anything still live in TestStore) — used for the
 	// per-target trend view, which needs a real timestamp to chart
@@ -308,5 +342,32 @@ func buildSnapshot(t *TestState) TestSnapshot {
 		}
 	}
 	sort.Slice(snap.SubJobs, func(i, j int) bool { return snap.SubJobs[i].JobID < snap.SubJobs[j].JobID })
+	snap.P50MS, snap.P95MS, snap.P99MS = combinedPercentiles(t)
 	return snap
+}
+
+// combinedPercentiles merges every sub-job's latency sketch into one and
+// reads the test-wide p50/p95/p99 off it. All nil unless every sub-job
+// that has sent requests also sent a sketch — a merge missing one worker's
+// samples would be a wrong answer presented as a right one.
+func combinedPercentiles(t *TestState) (p50, p95, p99 *float64) {
+	merged := &latencySketch{counts: make(map[int]uint64)}
+	for _, sj := range t.SubJobs {
+		if sj.requests == 0 {
+			continue
+		}
+		if sj.sketch == nil {
+			return nil, nil, nil
+		}
+		merged.merge(sj.sketch)
+	}
+	q := func(q float64) *float64 {
+		v, ok := merged.quantileMS(q)
+		if !ok {
+			return nil
+		}
+		v = math.Round(v*10) / 10
+		return &v
+	}
+	return q(0.50), q(0.95), q(0.99)
 }

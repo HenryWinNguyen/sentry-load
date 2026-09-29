@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -114,5 +115,16 @@ func TestIsValidWebhookURL(t *testing.T) {
 				t.Fatalf("isValidWebhookURL(%q) = %v, want %v", tc.url, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestFormatWebhookMessageIncludesCombinedP95WhenKnown(t *testing.T) {
+	p95 := 88.4
+	msg := formatWebhookMessage(TestSnapshot{URL: "https://example.com", TotalRequests: 10, P95MS: &p95}, "")
+	if !strings.Contains(msg, "p95 88.4ms") {
+		t.Fatalf("message missing combined p95: %q", msg)
+	}
+	if strings.Contains(formatWebhookMessage(TestSnapshot{URL: "https://example.com"}, ""), "p95") {
+		t.Fatal("message claimed a p95 the test doesn't have")
 	}
 }

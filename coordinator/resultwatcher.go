@@ -56,18 +56,17 @@ func watchResults(ctx context.Context, rdb *redis.Client, store *TestStore, hist
 					}
 					continue
 				}
-				justFinished := store.Update(
-					testID,
-					strField(msg.Values["job_id"]),
-					intField(msg.Values["requests"]),
-					intField(msg.Values["errors"]),
-					floatField(msg.Values["rps"]),
-					strField(msg.Values["p50_ms"]),
-					strField(msg.Values["p95_ms"]),
-					strField(msg.Values["p99_ms"]),
-					msg.Values["done"] == "true",
-					msg.Values["circuit_broken"] == "true",
-				)
+				justFinished := store.Update(testID, strField(msg.Values["job_id"]), resultUpdate{
+					Requests:      intField(msg.Values["requests"]),
+					Errors:        intField(msg.Values["errors"]),
+					RPS:           floatField(msg.Values["rps"]),
+					P50:           strField(msg.Values["p50_ms"]),
+					P95:           strField(msg.Values["p95_ms"]),
+					P99:           strField(msg.Values["p99_ms"]),
+					Done:          msg.Values["done"] == "true",
+					CircuitBroken: msg.Values["circuit_broken"] == "true",
+					LatencySketch: strField(msg.Values["latency_sketch"]),
+				})
 				if justFinished {
 					onTestFinished(ctx, store, history, users, webhooks, dashboardURL, testID)
 				}
