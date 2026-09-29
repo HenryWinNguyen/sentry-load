@@ -64,6 +64,8 @@ func main() {
 
 	go heartbeat(ctx, rdb, consumerName)
 
+	queue := jobQueue{rdb: rdb, stream: jobsStream, group: consumerGroup}
+
 	metricsAddr := os.Getenv("METRICS_ADDR")
 	if metricsAddr == "" {
 		metricsAddr = ":9091"
@@ -78,6 +80,27 @@ func main() {
 			log.Printf("%s shutting down", consumerName)
 			return
 		default:
+		}
+
+		// Stalled work first: a job whose worker died is older than
+		// anything new on the stream, and its test is already running
+		// late.
+		stale, exhausted, err := queue.claimStale(ctx, consumerName, staleJobAfter, maxDeliveries)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("stale-job check failed: %v", err)
+		}
+		if stale != nil {
+			if exhausted {
+				abandonJob(ctx, rdb, stale.Values)
+			} else {
+				log.Printf("%s reclaimed stalled job %s", consumerName, stale.ID)
+				jobsReclaimedTotal.Inc()
+				runLeased(ctx, queue, consumerName, *stale)
+			}
+			if err := rdb.XAck(ctx, jobsStream, consumerGroup, stale.ID).Err(); err != nil {
+				log.Printf("failed to ack job %s: %v", stale.ID, err)
+			}
+			continue
 		}
 
 		streams, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
@@ -108,13 +131,21 @@ func main() {
 
 		for _, stream := range streams {
 			for _, msg := range stream.Messages {
-				handleJob(ctx, rdb, msg.Values)
+				runLeased(ctx, queue, consumerName, msg)
 				if err := rdb.XAck(ctx, jobsStream, consumerGroup, msg.ID).Err(); err != nil {
 					log.Printf("failed to ack job %s: %v", msg.ID, err)
 				}
 			}
 		}
 	}
+}
+
+// runLeased runs one job while holding its lease (see reclaim.go), so no
+// other worker mistakes it for stalled however long the test runs.
+func runLeased(ctx context.Context, queue jobQueue, consumerName string, msg redis.XMessage) {
+	stop := queue.holdLease(ctx, consumerName, msg.ID, leaseRenewInterval)
+	defer stop()
+	handleJob(ctx, queue.rdb, msg.Values)
 }
 
 // heartbeat refreshes this worker's presence key until ctx is cancelled.

@@ -120,6 +120,7 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			circuit_broken BOOLEAN NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS idx_sub_jobs_test ON sub_jobs (test_id);
+		ALTER TABLE sub_jobs ADD COLUMN IF NOT EXISTS abandoned BOOLEAN NOT NULL DEFAULT false;
 
 		CREATE TABLE IF NOT EXISTS users (
 			id           TEXT PRIMARY KEY,
@@ -170,8 +171,8 @@ func (h *postgresHistory) Save(ctx context.Context, snap TestSnapshot, ownerID s
 
 	for _, sj := range snap.SubJobs {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO sub_jobs (job_id, test_id, requests, errors, rps, p50_ms, p95_ms, p99_ms, circuit_broken)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			INSERT INTO sub_jobs (job_id, test_id, requests, errors, rps, p50_ms, p95_ms, p99_ms, circuit_broken, abandoned)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 			ON CONFLICT (job_id) DO UPDATE SET
 				requests       = EXCLUDED.requests,
 				errors         = EXCLUDED.errors,
@@ -179,8 +180,9 @@ func (h *postgresHistory) Save(ctx context.Context, snap TestSnapshot, ownerID s
 				p50_ms         = EXCLUDED.p50_ms,
 				p95_ms         = EXCLUDED.p95_ms,
 				p99_ms         = EXCLUDED.p99_ms,
-				circuit_broken = EXCLUDED.circuit_broken
-		`, sj.JobID, snap.TestID, sj.Requests, sj.Errors, sj.RPS, sj.P50MS, sj.P95MS, sj.P99MS, sj.CircuitBroken)
+				circuit_broken = EXCLUDED.circuit_broken,
+				abandoned      = EXCLUDED.abandoned
+		`, sj.JobID, snap.TestID, sj.Requests, sj.Errors, sj.RPS, sj.P50MS, sj.P95MS, sj.P99MS, sj.CircuitBroken, sj.Abandoned)
 		if err != nil {
 			return fmt.Errorf("upserting sub-job %s: %w", sj.JobID, err)
 		}
@@ -208,6 +210,7 @@ func (h *postgresHistory) Get(ctx context.Context, testID, ownerID string) (Test
 		return TestSnapshot{}, false, err
 	}
 	snap.SubJobs = subJobs
+	snap.Abandoned = anyAbandoned(subJobs)
 	return snap, true, nil
 }
 
@@ -256,12 +259,22 @@ func (h *postgresHistory) GetByShareToken(ctx context.Context, shareToken string
 		return TestSnapshot{}, false, err
 	}
 	snap.SubJobs = subJobs
+	snap.Abandoned = anyAbandoned(subJobs)
 	return snap, true, nil
+}
+
+func anyAbandoned(subJobs []SubJobSnapshot) bool {
+	for _, sj := range subJobs {
+		if sj.Abandoned {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *postgresHistory) loadSubJobs(ctx context.Context, testID string) ([]SubJobSnapshot, error) {
 	rows, err := h.pool.Query(ctx, `
-		SELECT job_id, requests, errors, rps, p50_ms, p95_ms, p99_ms, circuit_broken
+		SELECT job_id, requests, errors, rps, p50_ms, p95_ms, p99_ms, circuit_broken, abandoned
 		FROM sub_jobs WHERE test_id = $1 ORDER BY job_id
 	`, testID)
 	if err != nil {
@@ -272,7 +285,7 @@ func (h *postgresHistory) loadSubJobs(ctx context.Context, testID string) ([]Sub
 	var subJobs []SubJobSnapshot
 	for rows.Next() {
 		var sj SubJobSnapshot
-		if err := rows.Scan(&sj.JobID, &sj.Requests, &sj.Errors, &sj.RPS, &sj.P50MS, &sj.P95MS, &sj.P99MS, &sj.CircuitBroken); err != nil {
+		if err := rows.Scan(&sj.JobID, &sj.Requests, &sj.Errors, &sj.RPS, &sj.P50MS, &sj.P95MS, &sj.P99MS, &sj.CircuitBroken, &sj.Abandoned); err != nil {
 			return nil, fmt.Errorf("scanning sub-job row: %w", err)
 		}
 		sj.Done = true

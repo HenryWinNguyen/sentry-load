@@ -12,12 +12,22 @@ const STATUS_STYLES = {
     text: "text-amber-700 dark:text-amber-400",
     pulse: false,
   },
+  abandoned: {
+    dot: "bg-muted-foreground",
+    text: "text-muted-foreground",
+    pulse: false,
+  },
 } as const;
 
 export type TestStatus = keyof typeof STATUS_STYLES;
 
-export function testStatus(done: boolean, circuitBroken: boolean): TestStatus {
+export function testStatus(
+  done: boolean,
+  circuitBroken: boolean,
+  abandoned = false,
+): TestStatus {
   if (circuitBroken) return "circuit-broken";
+  if (abandoned) return "abandoned";
   if (done) return "done";
   return "running";
 }
@@ -26,6 +36,8 @@ export function statusLabel(status: TestStatus): string {
   switch (status) {
     case "circuit-broken":
       return "Circuit-broken";
+    case "abandoned":
+      return "Incomplete";
     case "done":
       return "Done";
     case "running":

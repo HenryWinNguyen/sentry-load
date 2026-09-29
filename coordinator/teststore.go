@@ -15,6 +15,7 @@ type subJobState struct {
 	p50, p95, p99 string
 	done          bool
 	circuitBroken bool // aborted early by the worker's error-rate breaker (M9)
+	abandoned     bool // gave up after repeated worker failures (see worker/reclaim.go)
 }
 
 // TestState is the full in-memory record of one submitted test: which
@@ -163,6 +164,32 @@ func (s *TestStore) Update(testID, jobID string, requests, errors int, rps float
 	return !wasDone && allSubJobsDone(t)
 }
 
+// MarkAbandoned records that the worker fleet gave up on a sub-job after
+// it hit its max delivery count (every worker that picked it up died
+// mid-run). The sub-job counts as done, so the test can finish instead of
+// waiting forever, and keeps whatever numbers were last reported for it
+// rather than having them zeroed. Reports justFinished exactly like Update.
+func (s *TestStore) MarkAbandoned(testID, jobID string) (justFinished bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, ok := s.tests[testID]
+	if !ok {
+		return false
+	}
+	sj, ok := t.SubJobs[jobID]
+	if !ok {
+		return false
+	}
+	wasDone := allSubJobsDone(t)
+	sj.done = true
+	sj.abandoned = true
+
+	s.notifySubscribers(testID, buildSnapshot(t))
+
+	return !wasDone && allSubJobsDone(t)
+}
+
 func allSubJobsDone(t *TestState) bool {
 	for _, sj := range t.SubJobs {
 		if !sj.done {
@@ -199,6 +226,10 @@ type SubJobSnapshot struct {
 	P99MS         string  `json:"p99_ms"`
 	Done          bool    `json:"done"`
 	CircuitBroken bool    `json:"circuit_broken"`
+	// Abandoned means no worker managed to finish this sub-job: each one
+	// that picked it up died mid-run, until it hit the max delivery count.
+	// Its numbers are whatever the last worker reported before dying.
+	Abandoned bool `json:"abandoned"`
 }
 
 // TestSnapshot is the JSON-friendly view of a whole test: merged totals
@@ -217,6 +248,7 @@ type TestSnapshot struct {
 	Label         string           `json:"label,omitempty"`
 	Done          bool             `json:"done"`
 	CircuitBroken bool             `json:"circuit_broken"` // true if any sub-job aborted early (M9)
+	Abandoned     bool             `json:"abandoned"`      // true if any sub-job was abandoned (see SubJobSnapshot.Abandoned)
 	TotalRequests int              `json:"total_requests"`
 	TotalErrors   int              `json:"total_errors"`
 	CombinedRPS   float64          `json:"combined_rps"`
@@ -260,6 +292,7 @@ func buildSnapshot(t *TestState) TestSnapshot {
 			P99MS:         sj.p99,
 			Done:          sj.done,
 			CircuitBroken: sj.circuitBroken,
+			Abandoned:     sj.abandoned,
 		})
 		snap.TotalRequests += sj.requests
 		snap.TotalErrors += sj.errors
@@ -269,6 +302,9 @@ func buildSnapshot(t *TestState) TestSnapshot {
 		}
 		if sj.circuitBroken {
 			snap.CircuitBroken = true
+		}
+		if sj.abandoned {
+			snap.Abandoned = true
 		}
 	}
 	sort.Slice(snap.SubJobs, func(i, j int) bool { return snap.SubJobs[i].JobID < snap.SubJobs[j].JobID })

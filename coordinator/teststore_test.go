@@ -261,3 +261,39 @@ func TestTestStoreSubscribeDoesNotBlockOnFullChannel(t *testing.T) {
 	}
 	<-ch // drain one, just to use the channel and avoid an unused-var-style lint complaint
 }
+
+func TestTestStoreMarkAbandonedFinishesTestAndKeepsCounts(t *testing.T) {
+	s := NewTestStore()
+	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a", "job-b"})
+
+	s.Update("test-1", "job-a", 100, 0, 50.0, "10", "20", "30", true, false)
+	s.Update("test-1", "job-b", 40, 2, 20.0, "11", "21", "31", false, false) // then its worker died
+
+	if !s.MarkAbandoned("test-1", "job-b") {
+		t.Fatal("expected abandoning the last open sub-job to finish the test")
+	}
+	if s.MarkAbandoned("test-1", "job-b") {
+		t.Fatal("a repeated abandon report re-triggered the finished signal")
+	}
+
+	snap, _ := s.Snapshot("test-1", "user-1")
+	if !snap.Done || !snap.Abandoned {
+		t.Fatalf("got done=%v abandoned=%v, want both true", snap.Done, snap.Abandoned)
+	}
+	if snap.TotalRequests != 140 {
+		t.Fatalf("got total requests %d, want 140 (abandoned sub-job's last counts kept)", snap.TotalRequests)
+	}
+	for _, sj := range snap.SubJobs {
+		if want := sj.JobID == "job-b"; sj.Abandoned != want {
+			t.Errorf("sub-job %s: abandoned=%v, want %v", sj.JobID, sj.Abandoned, want)
+		}
+	}
+}
+
+func TestTestStoreMarkAbandonedIgnoresUnknownIDs(t *testing.T) {
+	s := NewTestStore()
+	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a"})
+	if s.MarkAbandoned("unknown-test", "job-a") || s.MarkAbandoned("test-1", "unknown-job") {
+		t.Fatal("abandoning an unknown test/job reported a finish")
+	}
+}

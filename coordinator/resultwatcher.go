@@ -50,6 +50,12 @@ func watchResults(ctx context.Context, rdb *redis.Client, store *TestStore, hist
 			for _, msg := range stream.Messages {
 				lastID = msg.ID
 				testID := strField(msg.Values["test_id"])
+				if msg.Values["abandoned"] == "true" {
+					if store.MarkAbandoned(testID, strField(msg.Values["job_id"])) {
+						onTestFinished(ctx, store, history, users, webhooks, dashboardURL, testID)
+					}
+					continue
+				}
 				justFinished := store.Update(
 					testID,
 					strField(msg.Values["job_id"]),
