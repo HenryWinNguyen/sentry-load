@@ -79,5 +79,8 @@ jobs:
 
       - run: npm ci
       - run: npm run lint
-      - run: npx tsc --noEmit
+      # Build before the standalone type-check: Next generates global route
+      # types (LayoutProps, PageProps) into .next/types during the build,
+      # and tsc can't resolve them on a clean checkout without it.
       - run: npm run build
+      - run: npx tsc --noEmit
