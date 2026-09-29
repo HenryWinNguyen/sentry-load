@@ -40,8 +40,6 @@ func main() {
 	}
 
 	tests := NewTestStore()
-	domains := NewDomainStore()
-	users := NewUserStore()
 	enqueuer := &redisEnqueuer{rdb: rdb}
 	workers := &redisWorkerCounter{rdb: rdb}
 	allowlist := parseAllowlist(os.Getenv("ALLOWLISTED_HOSTS"))
@@ -79,7 +77,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var history testHistoryStore
+	var (
+		history testHistoryStore
+		users   *UserStore
+		domains *DomainStore
+	)
 	if url := os.Getenv("POSTGRES_URL"); url != "" {
 		h, err := newPostgresHistory(ctx, url)
 		if err != nil {
@@ -87,8 +89,16 @@ func main() {
 		}
 		defer h.Close()
 		history = h
+		if users, err = LoadUserStore(ctx, h.identity()); err != nil {
+			log.Fatalf("failed to load users/sessions: %v", err)
+		}
+		if domains, err = LoadDomainStore(ctx, h.identity()); err != nil {
+			log.Fatalf("failed to load verified domains: %v", err)
+		}
 	} else {
-		log.Print("POSTGRES_URL not set — test history (GET /tests) disabled, rest of the API still works")
+		log.Print("POSTGRES_URL not set — test history (GET /tests) disabled and users/sessions/domains are in-memory only, rest of the API still works")
+		users = NewUserStore()
+		domains = NewDomainStore()
 	}
 
 	webhooks := &chatWebhookNotifier{httpClient: http.DefaultClient}
