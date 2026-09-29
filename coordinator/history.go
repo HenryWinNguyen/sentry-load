@@ -104,6 +104,9 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		);
 		ALTER TABLE tests ADD COLUMN IF NOT EXISTS share_token TEXT;
 		ALTER TABLE tests ADD COLUMN IF NOT EXISTS label TEXT;
+		ALTER TABLE tests ADD COLUMN IF NOT EXISTS p50_ms DOUBLE PRECISION;
+		ALTER TABLE tests ADD COLUMN IF NOT EXISTS p95_ms DOUBLE PRECISION;
+		ALTER TABLE tests ADD COLUMN IF NOT EXISTS p99_ms DOUBLE PRECISION;
 		CREATE INDEX IF NOT EXISTS idx_tests_owner ON tests (owner_id, finished_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_tests_owner_url ON tests (owner_id, url, finished_at);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_tests_share_token ON tests (share_token) WHERE share_token IS NOT NULL;
@@ -156,15 +159,18 @@ func (h *postgresHistory) Save(ctx context.Context, snap TestSnapshot, ownerID s
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op if Commit already succeeded
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO tests (test_id, owner_id, url, total_requests, total_errors, combined_rps, circuit_broken, finished_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO tests (test_id, owner_id, url, total_requests, total_errors, combined_rps, circuit_broken, finished_at, p50_ms, p95_ms, p99_ms)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (test_id) DO UPDATE SET
 			total_requests = EXCLUDED.total_requests,
 			total_errors   = EXCLUDED.total_errors,
 			combined_rps   = EXCLUDED.combined_rps,
 			circuit_broken = EXCLUDED.circuit_broken,
-			finished_at    = EXCLUDED.finished_at
-	`, snap.TestID, ownerID, snap.URL, snap.TotalRequests, snap.TotalErrors, snap.CombinedRPS, snap.CircuitBroken, time.Now())
+			finished_at    = EXCLUDED.finished_at,
+			p50_ms         = EXCLUDED.p50_ms,
+			p95_ms         = EXCLUDED.p95_ms,
+			p99_ms         = EXCLUDED.p99_ms
+	`, snap.TestID, ownerID, snap.URL, snap.TotalRequests, snap.TotalErrors, snap.CombinedRPS, snap.CircuitBroken, time.Now(), snap.P50MS, snap.P95MS, snap.P99MS)
 	if err != nil {
 		return fmt.Errorf("upserting test: %w", err)
 	}
@@ -197,9 +203,9 @@ func (h *postgresHistory) Save(ctx context.Context, snap TestSnapshot, ownerID s
 func (h *postgresHistory) Get(ctx context.Context, testID, ownerID string) (TestSnapshot, bool, error) {
 	var snap TestSnapshot
 	err := h.pool.QueryRow(ctx, `
-		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken, COALESCE(label, '')
+		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken, COALESCE(label, ''), p50_ms, p95_ms, p99_ms
 		FROM tests WHERE test_id = $1 AND owner_id = $2
-	`, testID, ownerID).Scan(&snap.TestID, &snap.URL, &snap.TotalRequests, &snap.TotalErrors, &snap.CombinedRPS, &snap.CircuitBroken, &snap.Label)
+	`, testID, ownerID).Scan(&snap.TestID, &snap.URL, &snap.TotalRequests, &snap.TotalErrors, &snap.CombinedRPS, &snap.CircuitBroken, &snap.Label, &snap.P50MS, &snap.P95MS, &snap.P99MS)
 	if err != nil {
 		return TestSnapshot{}, false, nil //nolint:nilerr // "not found" isn't a caller-facing error here, same as TestStore.Snapshot
 	}
@@ -246,9 +252,9 @@ func (h *postgresHistory) EnsureShareToken(ctx context.Context, testID, ownerID 
 func (h *postgresHistory) GetByShareToken(ctx context.Context, shareToken string) (TestSnapshot, bool, error) {
 	var snap TestSnapshot
 	err := h.pool.QueryRow(ctx, `
-		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken, COALESCE(label, '')
+		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken, COALESCE(label, ''), p50_ms, p95_ms, p99_ms
 		FROM tests WHERE share_token = $1
-	`, shareToken).Scan(&snap.TestID, &snap.URL, &snap.TotalRequests, &snap.TotalErrors, &snap.CombinedRPS, &snap.CircuitBroken, &snap.Label)
+	`, shareToken).Scan(&snap.TestID, &snap.URL, &snap.TotalRequests, &snap.TotalErrors, &snap.CombinedRPS, &snap.CircuitBroken, &snap.Label, &snap.P50MS, &snap.P95MS, &snap.P99MS)
 	if err != nil {
 		return TestSnapshot{}, false, nil //nolint:nilerr
 	}
@@ -297,7 +303,7 @@ func (h *postgresHistory) loadSubJobs(ctx context.Context, testID string) ([]Sub
 // List returns ownerID's most recent tests, newest first, capped at limit.
 func (h *postgresHistory) List(ctx context.Context, ownerID string, limit int) ([]TestSnapshot, error) {
 	rows, err := h.pool.Query(ctx, `
-		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken, finished_at, COALESCE(label, '')
+		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken, finished_at, COALESCE(label, ''), p50_ms, p95_ms, p99_ms
 		FROM tests WHERE owner_id = $1 ORDER BY finished_at DESC LIMIT $2
 	`, ownerID, limit)
 	if err != nil {
@@ -312,7 +318,7 @@ func (h *postgresHistory) List(ctx context.Context, ownerID string, limit int) (
 // series to plot rather than a "most recent N" list.
 func (h *postgresHistory) ListByURL(ctx context.Context, ownerID, url string, limit int) ([]TestSnapshot, error) {
 	rows, err := h.pool.Query(ctx, `
-		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken, finished_at, COALESCE(label, '')
+		SELECT test_id, url, total_requests, total_errors, combined_rps, circuit_broken, finished_at, COALESCE(label, ''), p50_ms, p95_ms, p99_ms
 		FROM tests WHERE owner_id = $1 AND url = $2 ORDER BY finished_at ASC LIMIT $3
 	`, ownerID, url, limit)
 	if err != nil {
@@ -349,7 +355,7 @@ func scanTestRows(rows pgx.Rows) ([]TestSnapshot, error) {
 	for rows.Next() {
 		var snap TestSnapshot
 		var finishedAt time.Time
-		if err := rows.Scan(&snap.TestID, &snap.URL, &snap.TotalRequests, &snap.TotalErrors, &snap.CombinedRPS, &snap.CircuitBroken, &finishedAt, &snap.Label); err != nil {
+		if err := rows.Scan(&snap.TestID, &snap.URL, &snap.TotalRequests, &snap.TotalErrors, &snap.CombinedRPS, &snap.CircuitBroken, &finishedAt, &snap.Label, &snap.P50MS, &snap.P95MS, &snap.P99MS); err != nil {
 			return nil, fmt.Errorf("scanning test row: %w", err)
 		}
 		snap.Done = true

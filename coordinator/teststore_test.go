@@ -44,7 +44,7 @@ func TestTestStoreUpdateMergesAndDetectsDone(t *testing.T) {
 	s := NewTestStore()
 	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a", "job-b"})
 
-	s.Update("test-1", "job-a", 100, 0, 50.0, "10", "20", "30", false, false)
+	s.Update("test-1", "job-a", resultUpdate{Requests: 100, Errors: 0, RPS: 50.0, P50: "10", P95: "20", P99: "30", Done: false, CircuitBroken: false})
 	snap, _ := s.Snapshot("test-1", "user-1")
 	if snap.Done {
 		t.Fatal("expected not done while job-b hasn't reported yet")
@@ -53,14 +53,14 @@ func TestTestStoreUpdateMergesAndDetectsDone(t *testing.T) {
 		t.Fatalf("got requests=%d rps=%v, want 100/50.0", snap.TotalRequests, snap.CombinedRPS)
 	}
 
-	s.Update("test-1", "job-b", 200, 5, 75.0, "12", "22", "32", true, false)
+	s.Update("test-1", "job-b", resultUpdate{Requests: 200, Errors: 5, RPS: 75.0, P50: "12", P95: "22", P99: "32", Done: true, CircuitBroken: false})
 	// job-a hasn't reported done=true yet.
 	snap, _ = s.Snapshot("test-1", "user-1")
 	if snap.Done {
 		t.Fatal("expected not done while job-a hasn't reported done=true")
 	}
 
-	s.Update("test-1", "job-a", 150, 1, 55.0, "10", "20", "30", true, false)
+	s.Update("test-1", "job-a", resultUpdate{Requests: 150, Errors: 1, RPS: 55.0, P50: "10", P95: "20", P99: "30", Done: true, CircuitBroken: false})
 	snap, _ = s.Snapshot("test-1", "user-1")
 	if !snap.Done {
 		t.Fatal("expected done once every sub-job reports done=true")
@@ -81,8 +81,8 @@ func TestTestStoreUpdateIgnoresUnknownIDs(t *testing.T) {
 	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a"})
 
 	// Neither call should panic or affect the registered test.
-	s.Update("unknown-test", "job-a", 999, 0, 0, "", "", "", true, false)
-	s.Update("test-1", "unknown-job", 999, 0, 0, "", "", "", true, false)
+	s.Update("unknown-test", "job-a", resultUpdate{Requests: 999, Errors: 0, RPS: 0, P50: "", P95: "", P99: "", Done: true, CircuitBroken: false})
+	s.Update("test-1", "unknown-job", resultUpdate{Requests: 999, Errors: 0, RPS: 0, P50: "", P95: "", P99: "", Done: true, CircuitBroken: false})
 
 	snap, _ := s.Snapshot("test-1", "user-1")
 	if snap.TotalRequests != 0 {
@@ -94,8 +94,8 @@ func TestTestStoreUpdatePropagatesCircuitBroken(t *testing.T) {
 	s := NewTestStore()
 	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a", "job-b"})
 
-	s.Update("test-1", "job-a", 50, 40, 10.0, "10", "20", "30", true, true)
-	s.Update("test-1", "job-b", 100, 1, 20.0, "10", "20", "30", true, false)
+	s.Update("test-1", "job-a", resultUpdate{Requests: 50, Errors: 40, RPS: 10.0, P50: "10", P95: "20", P99: "30", Done: true, CircuitBroken: true})
+	s.Update("test-1", "job-b", resultUpdate{Requests: 100, Errors: 1, RPS: 20.0, P50: "10", P95: "20", P99: "30", Done: true, CircuitBroken: false})
 
 	snap, _ := s.Snapshot("test-1", "user-1")
 	if !snap.CircuitBroken {
@@ -136,18 +136,18 @@ func TestTestStoreUpdateReportsJustFinished(t *testing.T) {
 	s := NewTestStore()
 	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a", "job-b"})
 
-	if finished := s.Update("test-1", "job-a", 100, 0, 50.0, "10", "20", "30", false, false); finished {
+	if finished := s.Update("test-1", "job-a", resultUpdate{Requests: 100, Errors: 0, RPS: 50.0, P50: "10", P95: "20", P99: "30", Done: false, CircuitBroken: false}); finished {
 		t.Fatal("expected justFinished=false while job-a isn't even done yet")
 	}
-	if finished := s.Update("test-1", "job-a", 150, 0, 50.0, "10", "20", "30", true, false); finished {
+	if finished := s.Update("test-1", "job-a", resultUpdate{Requests: 150, Errors: 0, RPS: 50.0, P50: "10", P95: "20", P99: "30", Done: true, CircuitBroken: false}); finished {
 		t.Fatal("expected justFinished=false while job-b hasn't reported done yet")
 	}
-	if finished := s.Update("test-1", "job-b", 200, 0, 60.0, "10", "20", "30", true, false); !finished {
+	if finished := s.Update("test-1", "job-b", resultUpdate{Requests: 200, Errors: 0, RPS: 60.0, P50: "10", P95: "20", P99: "30", Done: true, CircuitBroken: false}); !finished {
 		t.Fatal("expected justFinished=true the moment the last sub-job reports done")
 	}
 	// A later, redundant "done" message for the same test shouldn't
 	// re-trigger — it already transitioned once.
-	if finished := s.Update("test-1", "job-b", 200, 0, 60.0, "10", "20", "30", true, false); finished {
+	if finished := s.Update("test-1", "job-b", resultUpdate{Requests: 200, Errors: 0, RPS: 60.0, P50: "10", P95: "20", P99: "30", Done: true, CircuitBroken: false}); finished {
 		t.Fatal("expected justFinished=false on a repeat done message")
 	}
 }
@@ -156,10 +156,10 @@ func TestTestStoreUpdateJustFinishedIgnoresUnknownIDs(t *testing.T) {
 	s := NewTestStore()
 	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a"})
 
-	if finished := s.Update("unknown-test", "job-a", 1, 0, 1, "", "", "", true, false); finished {
+	if finished := s.Update("unknown-test", "job-a", resultUpdate{Requests: 1, Errors: 0, RPS: 1, P50: "", P95: "", P99: "", Done: true, CircuitBroken: false}); finished {
 		t.Fatal("expected justFinished=false for an unknown test")
 	}
-	if finished := s.Update("test-1", "unknown-job", 1, 0, 1, "", "", "", true, false); finished {
+	if finished := s.Update("test-1", "unknown-job", resultUpdate{Requests: 1, Errors: 0, RPS: 1, P50: "", P95: "", P99: "", Done: true, CircuitBroken: false}); finished {
 		t.Fatal("expected justFinished=false for an unknown sub-job")
 	}
 }
@@ -191,7 +191,7 @@ func TestTestStoreSubscribeReceivesUpdates(t *testing.T) {
 	ch, unsubscribe := s.Subscribe("test-1")
 	defer unsubscribe()
 
-	s.Update("test-1", "job-a", 100, 0, 50.0, "10", "20", "30", false, false)
+	s.Update("test-1", "job-a", resultUpdate{Requests: 100, Errors: 0, RPS: 50.0, P50: "10", P95: "20", P99: "30", Done: false, CircuitBroken: false})
 
 	select {
 	case snap := <-ch:
@@ -211,7 +211,7 @@ func TestTestStoreSubscribeUnrelatedTestDoesNotNotify(t *testing.T) {
 	ch, unsubscribe := s.Subscribe("test-1")
 	defer unsubscribe()
 
-	s.Update("test-2", "job-b", 50, 0, 10.0, "1", "2", "3", true, false)
+	s.Update("test-2", "job-b", resultUpdate{Requests: 50, Errors: 0, RPS: 10.0, P50: "1", P95: "2", P99: "3", Done: true, CircuitBroken: false})
 
 	select {
 	case snap := <-ch:
@@ -233,7 +233,7 @@ func TestTestStoreUnsubscribeStopsUpdatesAndClosesChannel(t *testing.T) {
 	}
 
 	// Must not panic even though nothing is reading it anymore.
-	s.Update("test-1", "job-a", 100, 0, 50.0, "10", "20", "30", true, false)
+	s.Update("test-1", "job-a", resultUpdate{Requests: 100, Errors: 0, RPS: 50.0, P50: "10", P95: "20", P99: "30", Done: true, CircuitBroken: false})
 }
 
 func TestTestStoreSubscribeDoesNotBlockOnFullChannel(t *testing.T) {
@@ -249,7 +249,7 @@ func TestTestStoreSubscribeDoesNotBlockOnFullChannel(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 20; i++ {
-			s.Update("test-1", "job-a", i, 0, 1.0, "1", "2", "3", false, false)
+			s.Update("test-1", "job-a", resultUpdate{Requests: i, Errors: 0, RPS: 1.0, P50: "1", P95: "2", P99: "3", Done: false, CircuitBroken: false})
 		}
 		close(done)
 	}()
@@ -266,8 +266,8 @@ func TestTestStoreMarkAbandonedFinishesTestAndKeepsCounts(t *testing.T) {
 	s := NewTestStore()
 	s.Register("test-1", "user-1", "http://example.com/fast", []string{"job-a", "job-b"})
 
-	s.Update("test-1", "job-a", 100, 0, 50.0, "10", "20", "30", true, false)
-	s.Update("test-1", "job-b", 40, 2, 20.0, "11", "21", "31", false, false) // then its worker died
+	s.Update("test-1", "job-a", resultUpdate{Requests: 100, Errors: 0, RPS: 50.0, P50: "10", P95: "20", P99: "30", Done: true, CircuitBroken: false})
+	s.Update("test-1", "job-b", resultUpdate{Requests: 40, Errors: 2, RPS: 20.0, P50: "11", P95: "21", P99: "31", Done: false, CircuitBroken: false}) // then its worker died
 
 	if !s.MarkAbandoned("test-1", "job-b") {
 		t.Fatal("expected abandoning the last open sub-job to finish the test")

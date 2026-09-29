@@ -19,6 +19,10 @@ type Metrics struct {
 	P99           time.Duration
 	Done          bool
 	CircuitBroken bool // true if the run was aborted early — see tripsCircuitBreaker
+	// LatencySketch is every latency so far in mergeable form (see
+	// sketch.go), so the coordinator can compute test-wide percentiles
+	// across all workers rather than only this worker's P50/P95/P99.
+	LatencySketch string
 }
 
 // Hard floor/threshold for the abuse-guardrail circuit breaker (M9): once a
@@ -75,5 +79,6 @@ func computeMetrics(jobID string, results []RequestResult, elapsed time.Duration
 	m.P50 = percentile(0.50)
 	m.P95 = percentile(0.95)
 	m.P99 = percentile(0.99)
+	m.LatencySketch = encodeLatencySketch(latencies)
 	return m
 }

@@ -353,6 +353,14 @@ export default function TestPage({
         />
       </div>
 
+      {snap.p95_ms !== undefined && (
+        <div className="mb-6 grid grid-cols-3 gap-4">
+          <Stat label="p50 latency" value={snap.p50_ms ?? 0} format={formatMs} />
+          <Stat label="p95 latency" value={snap.p95_ms} format={formatMs} />
+          <Stat label="p99 latency" value={snap.p99_ms ?? 0} format={formatMs} />
+        </div>
+      )}
+
       <div className="mb-8 grid grid-cols-1 gap-6 sm:grid-cols-2">
         <Card>
           <CardHeader>
@@ -411,9 +419,10 @@ export default function TestPage({
           <CardTitle className="flex items-center gap-1.5">
             Per worker
             <InfoTooltip>
-              Each worker&apos;s latency percentiles are shown separately.
-              Merging percentiles across independent machines isn&apos;t
-              statistically valid without the raw samples
+              Each worker&apos;s own latency percentiles. The test-wide
+              numbers above merge every worker&apos;s full latency
+              histogram, not these percentiles, which can&apos;t be
+              averaged
             </InfoTooltip>
           </CardTitle>
         </CardHeader>
@@ -477,7 +486,7 @@ export default function TestPage({
             newest. A rising RPS line or a falling error-rate line means
             it&apos;s actually getting better, not just this one run
           </p>
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-1.5">
@@ -512,6 +521,23 @@ export default function TestPage({
                   )}
                   color="var(--destructive)"
                   formatValue={(v) => `${v.toFixed(1)}%`}
+                />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-1.5">
+                  p95 latency across runs
+                  <InfoTooltip>
+                    Each point is one finished test&apos;s test-wide p95.
+                    Runs from before this was tracked are skipped
+                  </InfoTooltip>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <LineChart
+                  points={trend.flatMap((t) => (t.p95_ms !== undefined ? [t.p95_ms] : []))}
+                  formatValue={formatMs}
                 />
               </CardContent>
             </Card>
@@ -629,6 +655,10 @@ function Stat({
       </CardContent>
     </Card>
   );
+}
+
+function formatMs(v: number): string {
+  return v < 10 ? `${v.toFixed(1)}ms` : `${Math.round(v)}ms`;
 }
 
 function StatusBadge({

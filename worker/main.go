@@ -230,6 +230,7 @@ func handleJob(ctx context.Context, rdb *redis.Client, values map[string]interfa
 			"p99_ms":         strconv.FormatInt(m.P99.Milliseconds(), 10),
 			"done":           strconv.FormatBool(m.Done),
 			"circuit_broken": strconv.FormatBool(m.CircuitBroken),
+			"latency_sketch": m.LatencySketch,
 		}
 		if err := rdb.XAdd(ctx, &redis.XAddArgs{Stream: resultsStream, Values: fields}).Err(); err != nil {
 			log.Printf("failed to publish metrics for job %s: %v", m.JobID, err)

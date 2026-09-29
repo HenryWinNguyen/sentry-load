@@ -102,6 +102,12 @@ export interface TestSnapshot {
   total_requests: number;
   total_errors: number;
   combined_rps: number;
+  // Test-wide latency percentiles in ms, merged from every worker's
+  // latency sketch (within 1% of exact). Absent when they can't be
+  // computed honestly, e.g. tests from before sketches existed.
+  p50_ms?: number;
+  p95_ms?: number;
+  p99_ms?: number;
   sub_jobs: SubJobSnapshot[] | null;
   // Only set on snapshots that came from test history (list/trend), not
   // a live in-flight test.

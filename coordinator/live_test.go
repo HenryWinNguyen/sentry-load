@@ -87,7 +87,7 @@ func TestHandleTestLiveStreamsUpdatesThenCloses(t *testing.T) {
 		t.Fatal("expected the initial snapshot to not be done yet")
 	}
 
-	server.tests.Update("test-1", "job-a", 42, 0, 10.0, "1", "2", "3", false, false)
+	server.tests.Update("test-1", "job-a", resultUpdate{Requests: 42, Errors: 0, RPS: 10.0, P50: "1", P95: "2", P99: "3", Done: false, CircuitBroken: false})
 
 	var mid TestSnapshot
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -98,7 +98,7 @@ func TestHandleTestLiveStreamsUpdatesThenCloses(t *testing.T) {
 		t.Fatalf("got total requests %d, want 42", mid.TotalRequests)
 	}
 
-	server.tests.Update("test-1", "job-a", 100, 0, 20.0, "1", "2", "3", true, false)
+	server.tests.Update("test-1", "job-a", resultUpdate{Requests: 100, Errors: 0, RPS: 20.0, P50: "1", P95: "2", P99: "3", Done: true, CircuitBroken: false})
 
 	var final TestSnapshot
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
