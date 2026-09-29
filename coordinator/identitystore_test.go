@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -236,10 +235,7 @@ func TestMarkVerifiedFailsClosedWhenPersistFails(t *testing.T) {
 // `docker compose up -d postgres` and
 // TEST_POSTGRES_URL=postgres://sentryload:sentryload@localhost:5432/sentryload?sslmode=disable).
 func TestPostgresIdentityRoundTrip(t *testing.T) {
-	url := os.Getenv("TEST_POSTGRES_URL")
-	if url == "" {
-		t.Skip("TEST_POSTGRES_URL not set")
-	}
+	url := testPostgresURL(t)
 	ctx := context.Background()
 	h, err := newPostgresHistory(ctx, url) // runs migrate
 	if err != nil {
